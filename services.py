@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -44,6 +45,7 @@ SALES_LEDGER_NAME = "Inventory Pool"
 VAT_LABEL = "VAT"
 VAT_RATE = Decimal("7.5")
 SEED_UOM_PATH = Path(__file__).resolve().parent / "data" / "latest_uom_seed.csv"
+INVALID_FILENAME_CHARS = r'[<>:"/\\|?*\x00-\x1f]'
 
 
 class ServiceError(Exception):
@@ -572,7 +574,7 @@ def export_run_to_xls(run_id: str) -> tuple[str, bytes]:
     run.status = "exported"
     run.exported_at = datetime.now(ZoneInfo(current_app.config["APP_TIMEZONE"]))
     db.session.commit()
-    return f"{run.id}-delivery-note.xls", stream.getvalue()
+    return _build_export_filename(run), stream.getvalue()
 
 
 def resolve_product_match(source_sku: str, products: list[Product], aliases: list[ProductAlias]) -> ProductMatch | None:
@@ -631,6 +633,21 @@ def normalize_sku(value: str) -> str:
 
 def tomorrow_in_timezone(timezone_name: str) -> datetime:
     return datetime.now(ZoneInfo(timezone_name)) + timedelta(days=1)
+
+
+def _build_export_filename(run: UploadRun) -> str:
+    source_label = _clean_filename_part(Path(run.original_filename or "tracker.xlsx").stem, "Tracker")
+    invoice_label = _clean_filename_part(run.invoice_date, "Invoice Date")
+    return f"DALA Delivery Note - {invoice_label} - {source_label}.xls"
+
+
+def _clean_filename_part(value: str, fallback: str) -> str:
+    cleaned = re.sub(INVALID_FILENAME_CHARS, " ", str(value))
+    cleaned = cleaned.replace("_", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .-")
+    if not cleaned:
+        return fallback
+    return cleaned[:90].rstrip(" .-")
 
 
 def apply_product_to_line(line: UploadLine, product: Product, match_method: str) -> None:

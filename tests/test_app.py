@@ -111,6 +111,8 @@ def test_end_to_end_review_and_alias_memory() -> None:
         download = client.get(f"/runs/{run_id}/download")
         assert download.status_code == 200
         assert download.mimetype == "application/vnd.ms-excel"
+        disposition = download.headers["Content-Disposition"]
+        assert "DALA Delivery Note -" in disposition
 
         with app.app_context():
             alias = db.session.query(ProductAlias).filter_by(alias_name="SKU Vanila").one_or_none()
@@ -118,6 +120,8 @@ def test_end_to_end_review_and_alias_memory() -> None:
             assert alias is not None
             assert run is not None
             assert run.status == "exported"
+            assert run.invoice_date in disposition
+            assert "tracker" in disposition
             db.session.remove()
             db.engine.dispose()
 
