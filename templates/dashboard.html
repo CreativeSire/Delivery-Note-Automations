@@ -6,93 +6,132 @@
   <section class="page-header compact-header">
     <div>
       <p class="eyebrow">Dashboard</p>
-      <h1>Delivery note runs</h1>
+      <h1>Tracker studio</h1>
+      <p class="page-copy">Run today&apos;s tracker and watch the live database pulse.</p>
     </div>
-    <div class="header-chip">UOM -> Tracker -> Export</div>
+    <div class="header-chip">Live source ready</div>
   </section>
 
-  <section class="action-grid">
-    <article class="panel action-panel">
-      <div class="panel-head compact">
-        <div>
-          <p class="eyebrow">UOM</p>
-          <h2>Update source file</h2>
-        </div>
-      </div>
-      <form class="form-stack" action="{{ url_for('upload_uom') }}" method="post" enctype="multipart/form-data">
-        <label class="file-field" for="uom_workbook">
-          <span class="field-label">Excel workbook</span>
-          <input id="uom_workbook" name="uom_workbook" type="file" accept=".xlsx" required>
-        </label>
-        <button class="primary-button" type="submit">Import UOM</button>
-      </form>
-    </article>
-
-    <article class="panel action-panel">
+  <section class="dashboard-grid">
+    <article class="panel tracker-panel">
       <div class="panel-head compact">
         <div>
           <p class="eyebrow">Tracker</p>
-          <h2>Create run</h2>
+          <h2>Create a run</h2>
         </div>
+        <span class="mini-chip">Tomorrow&apos;s invoice date</span>
       </div>
+
       <form class="form-stack" action="{{ url_for('upload_tracker') }}" method="post" enctype="multipart/form-data">
-        <label class="file-field" for="tracker_workbook">
-          <span class="field-label">Excel workbook</span>
-          <input id="tracker_workbook" name="tracker_workbook" type="file" accept=".xlsx" required>
+        <label class="file-field">
+          <span class="field-label">Tracker workbook</span>
+          <input name="tracker_workbook" type="file" accept=".xlsx" required>
         </label>
+        <div class="chip-row">
+          <span class="info-chip">Above 0.00 only</span>
+          <span class="info-chip">Uses live UOM</span>
+          <span class="info-chip">Exports `.xls`</span>
+        </div>
         <button class="primary-button" type="submit">Analyze tracker</button>
       </form>
     </article>
+
+    <article class="panel chart-panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Chart</p>
+          <h2>Master health</h2>
+        </div>
+      </div>
+
+      <div class="donut-layout">
+        <div class="donut-chart" style="--pct: {{ chart.active_ratio }};">
+          <div class="donut-core">
+            <strong>{{ summary.product_count }}</strong>
+            <span>active</span>
+          </div>
+        </div>
+
+        <div class="chart-copy">
+          <div class="metric-line">
+            <span>Inactive products</span>
+            <strong>{{ summary.inactive_product_count }}</strong>
+          </div>
+          <div class="metric-line">
+            <span>Saved corrections</span>
+            <strong>{{ summary.alias_count }}</strong>
+          </div>
+          <div class="metric-line">
+            <span>Imports on record</span>
+            <strong>{{ summary.import_count }}</strong>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <article class="panel chart-panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Chart</p>
+          <h2>Operations pulse</h2>
+        </div>
+      </div>
+
+      <div class="pulse-block">
+        <span class="pulse-label">Recent source imports</span>
+        {% if summary.recent_imports %}
+          <div class="bar-chart">
+            {% for item in summary.recent_imports %}
+              <div class="bar-column">
+                <span class="bar-fill import-bar" style="height: {{ ((item.product_count / chart.import_max) * 100)|round(0, 'ceil') if chart.import_max else 10 }}%"></span>
+                <small>{{ item.product_count }}</small>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="empty-state">No source import yet.</p>
+        {% endif %}
+      </div>
+
+      <div class="pulse-block">
+        <span class="pulse-label">Recent tracker rows</span>
+        {% if summary.recent_runs %}
+          <div class="bar-chart">
+            {% for run in summary.recent_runs %}
+              <div class="bar-column">
+                <span class="bar-fill run-bar" style="height: {{ ((run.rows_detected / chart.run_max) * 100)|round(0, 'ceil') if chart.run_max else 10 }}%"></span>
+                <small>{{ run.rows_detected }}</small>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="empty-state">No tracker run yet.</p>
+        {% endif %}
+      </div>
+    </article>
   </section>
 
-  <section class="content-grid">
-    <article class="panel">
-      <div class="panel-head compact">
-        <div>
-          <p class="eyebrow">Recent runs</p>
-          <h2>Tracker activity</h2>
-        </div>
+  <section class="panel">
+    <div class="panel-head compact">
+      <div>
+        <p class="eyebrow">Recent runs</p>
+        <h2>Tracker activity</h2>
       </div>
-      {% if summary.recent_runs %}
-        <div class="data-table list-table">
-          {% for run in summary.recent_runs %}
-            <a class="list-row" href="{{ url_for('view_run', run_id=run.id) }}">
-              <div>
-                <strong>{{ run.original_filename }}</strong>
-                <span>{{ run.status.replace('_', ' ') }}</span>
-              </div>
-              <span>{{ run.rows_detected }} rows</span>
-            </a>
-          {% endfor %}
-        </div>
-      {% else %}
-        <p class="empty-state">No tracker run yet.</p>
-      {% endif %}
-    </article>
-
-    <article class="panel">
-      <div class="panel-head compact">
-        <div>
-          <p class="eyebrow">Source history</p>
-          <h2>Recent UOM imports</h2>
-        </div>
-        <a class="secondary-button" href="{{ url_for('product_master') }}">Open database</a>
-      </div>
-      {% if summary.recent_imports %}
-        <div class="data-table list-table">
-          {% for item in summary.recent_imports %}
-            <div class="list-row static-row">
-              <div>
-                <strong>{{ item.filename }}</strong>
-                <span>{{ item.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
-              </div>
-              <span>{{ item.product_count }} rows</span>
+    </div>
+    {% if summary.recent_runs %}
+      <div class="data-table list-table">
+        {% for run in summary.recent_runs %}
+          <a class="list-row" href="{{ url_for('view_run', run_id=run.id) }}">
+            <div>
+              <strong>{{ run.original_filename }}</strong>
+              <span>{{ run.status.replace('_', ' ') }}</span>
             </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <p class="empty-state">No UOM import yet.</p>
-      {% endif %}
-    </article>
+            <span>{{ run.rows_detected }} rows</span>
+          </a>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">No tracker run yet.</p>
+    {% endif %}
   </section>
 {% endblock %}

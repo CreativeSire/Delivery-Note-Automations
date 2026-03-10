@@ -32,6 +32,18 @@
             <strong class="sidebar-source">No UOM imported yet</strong>
             <span class="sidebar-meta">Add a source file to begin.</span>
           {% endif %}
+
+          {% if request.endpoint == 'index' %}
+            <form class="sidebar-form" action="{{ url_for('upload_uom') }}" method="post" enctype="multipart/form-data">
+              <label class="sidebar-upload">
+                <span class="field-label">Replace UOM</span>
+                <input name="uom_workbook" type="file" accept=".xlsx" required>
+              </label>
+              <button class="sidebar-button" type="submit">Update source</button>
+            </form>
+          {% else %}
+            <a class="sidebar-link" href="{{ url_for('index') }}">Update source on dashboard</a>
+          {% endif %}
         </section>
 
         <section class="sidebar-panel sidebar-stats">
@@ -51,11 +63,6 @@
             <span class="metric-label">Runs</span>
             <strong>{{ app_summary.run_count }}</strong>
           </div>
-        </section>
-
-        <section class="sidebar-panel">
-          <p class="panel-label">Quick note</p>
-          <p class="sidebar-note">The latest UOM import is treated as the live source of truth for matching, rate, and VAT.</p>
         </section>
       </aside>
 

@@ -51,7 +51,13 @@ def create_app(test_config: dict | None = None) -> Flask:
     @app.get("/")
     def index() -> str:
         summary = build_dashboard_summary()
-        return render_template("dashboard.html", summary=summary)
+        total_products = summary.product_count + summary.inactive_product_count
+        chart = {
+            "active_ratio": round((summary.product_count / total_products) * 100) if total_products else 0,
+            "import_max": max((item.product_count for item in summary.recent_imports), default=1),
+            "run_max": max((run.rows_detected for run in summary.recent_runs), default=1),
+        }
+        return render_template("dashboard.html", summary=summary, chart=chart)
 
     @app.get("/products")
     def product_master() -> str:
