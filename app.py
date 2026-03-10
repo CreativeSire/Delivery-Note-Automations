@@ -154,7 +154,14 @@ def create_app(test_config: dict | None = None) -> Flask:
             flash(str(exc), "error")
             return redirect(url_for("index"))
 
-        flash(f"UOM import complete. {import_log.product_count} product rows were saved.", "success")
+        skipped = getattr(import_log, "skipped_count", 0)
+        if skipped:
+            flash(
+                f"UOM update complete. {import_log.product_count} new product rows were added and {skipped} existing items were skipped.",
+                "success",
+            )
+        else:
+            flash(f"UOM import complete. {import_log.product_count} product rows were saved.", "success")
         return redirect(url_for("index"))
 
     @app.post("/runs/import")

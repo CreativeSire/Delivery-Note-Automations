@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from difflib import SequenceMatcher
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -103,26 +103,38 @@ def build_dashboard_summary() -> DashboardSummary:
 
 
 def import_uom_workbook(file_storage: Any) -> UomImport:
-    workbook = _load_workbook_from_upload(file_storage)
-    if UOM_SHEET not in workbook.sheetnames:
-        raise WorkbookShapeError(f"The workbook must contain a '{UOM_SHEET}' sheet.")
+    payload = _read_upload_payload(file_storage)
+    filename = file_storage.filename or "uom.xlsx"
 
-    sheet = workbook[UOM_SHEET]
-    rows = [
-        [
-            sheet.cell(row_index, 1).value,
-            sheet.cell(row_index, 2).value,
-            sheet.cell(row_index, 3).value,
-            sheet.cell(row_index, 4).value,
-            sheet.cell(row_index, 5).value,
-            sheet.cell(row_index, 6).value,
+    workbook = _try_load_workbook(payload)
+    if workbook is not None:
+        if UOM_SHEET not in workbook.sheetnames:
+            raise WorkbookShapeError(f"The workbook must contain a '{UOM_SHEET}' sheet.")
+
+        sheet = workbook[UOM_SHEET]
+        rows = [
+            [
+                sheet.cell(row_index, 1).value,
+                sheet.cell(row_index, 2).value,
+                sheet.cell(row_index, 3).value,
+                sheet.cell(row_index, 4).value,
+                sheet.cell(row_index, 5).value,
+                sheet.cell(row_index, 6).value,
+            ]
+            for row_index in range(2, sheet.max_row + 1)
         ]
-        for row_index in range(2, sheet.max_row + 1)
-    ]
-    return import_uom_rows(rows, file_storage.filename or "uom.xlsx")
+        return import_uom_rows(rows, filename, mode="replace")
+
+    item_rows = _extract_item_list_rows(payload)
+    if item_rows is not None:
+        return import_uom_rows(item_rows, filename, mode="merge")
+
+    raise WorkbookShapeError(
+        "The uploaded file must be either a UOM workbook or an item list export."
+    )
 
 
-def import_uom_rows(rows: list[list[Any]], filename: str) -> UomImport:
+def import_uom_rows(rows: list[list[Any]], filename: str, mode: str = "replace") -> UomImport:
     import_log = UomImport(filename=filename, product_count=0)
     db.session.add(import_log)
     db.session.flush()
@@ -130,23 +142,37 @@ def import_uom_rows(rows: list[list[Any]], filename: str) -> UomImport:
     existing_products = {
         product.sku_name: product for product in db.session.scalars(select(Product))
     }
+    existing_by_normalized: dict[str, list[Product]] = {}
     for product in existing_products.values():
-        if product.source_import_id is not None:
+        existing_by_normalized.setdefault(product.normalized_name, []).append(product)
+        if mode == "replace" and product.source_import_id is not None:
             product.is_active = False
 
     imported = 0
+    skipped = 0
     for row in rows:
         sku_name = _string_value(row[0])
         if not sku_name:
             continue
 
         product = existing_products.get(sku_name)
+        normalized_name = normalize_sku(sku_name)
+        if product is None and mode == "merge":
+            normalized_matches = existing_by_normalized.get(normalized_name, [])
+            if len(normalized_matches) == 1:
+                skipped += 1
+                continue
+
         if product is None:
-            product = Product(sku_name=sku_name, normalized_name=normalize_sku(sku_name))
+            product = Product(sku_name=sku_name, normalized_name=normalized_name)
             db.session.add(product)
             existing_products[sku_name] = product
+            existing_by_normalized.setdefault(normalized_name, []).append(product)
+        elif mode == "merge":
+            skipped += 1
+            continue
 
-        product.normalized_name = normalize_sku(sku_name)
+        product.normalized_name = normalized_name
         product.uom = _string_value(row[1]) or None
         product.alt_uom = _string_value(row[2]) or None
         product.conversion = _decimal_value(row[3])
@@ -157,6 +183,8 @@ def import_uom_rows(rows: list[list[Any]], filename: str) -> UomImport:
         imported += 1
 
     import_log.product_count = imported
+    import_log.skipped_count = skipped
+    import_log.import_mode = mode
     db.session.commit()
     return import_log
 
@@ -507,12 +535,81 @@ def apply_product_to_line(line: UploadLine, product: Product, match_method: str)
 
 
 def _load_workbook_from_upload(file_storage: Any):
+    payload = _read_upload_payload(file_storage)
+    workbook = _try_load_workbook(payload)
+    if workbook is not None:
+        return workbook
+    raise WorkbookShapeError("The uploaded file could not be read as an Excel workbook.")
+
+
+def _read_upload_payload(file_storage: Any) -> bytes:
     payload = file_storage.read()
     file_storage.stream.seek(0)
+    return payload
+
+
+def _try_load_workbook(payload: bytes):
     try:
         return load_workbook(BytesIO(payload), data_only=True)
-    except Exception as exc:  # pragma: no cover
-        raise WorkbookShapeError("The uploaded file could not be read as an Excel workbook.") from exc
+    except Exception:  # pragma: no cover
+        return None
+
+
+def _extract_item_list_rows(payload: bytes) -> list[list[Any]] | None:
+    text = _decode_text_payload(payload)
+    if text is None:
+        return None
+
+    reader = csv.DictReader(StringIO(text), delimiter="\t")
+    if reader.fieldnames is None:
+        return None
+
+    normalized_headers = {(_normalize_header(name) if name is not None else "") for name in reader.fieldnames}
+    required_headers = {"item name", "cases size", "item ptr"}
+    if not required_headers.issubset(normalized_headers):
+        return None
+
+    rows: list[list[Any]] = []
+    for row in reader:
+        cleaned = {_normalize_header(key): value for key, value in row.items() if key is not None}
+        sku_name = _string_value(cleaned.get("item name"))
+        if not sku_name:
+            continue
+
+        status = _string_value(cleaned.get("status")).lower()
+        if status and status != "active":
+            continue
+
+        price = _decimal_value(cleaned.get("item ptr"))
+        if price is None:
+            continue
+
+        tax_rate = _decimal_value(cleaned.get("tax rate"))
+        rows.append(
+            [
+                sku_name,
+                "ctn",
+                "unt",
+                _decimal_value(cleaned.get("cases size")),
+                "Yes" if tax_rate is not None and tax_rate > 0 else "No",
+                price,
+            ]
+        )
+
+    return rows or None
+
+
+def _decode_text_payload(payload: bytes) -> str | None:
+    for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            return payload.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return None
+
+
+def _normalize_header(value: Any) -> str:
+    return " ".join(_string_value(value).lower().split())
 
 
 def _string_value(value: Any) -> str:

@@ -48,6 +48,15 @@ def build_test_workbook(sheet_name: str = "tracker") -> BytesIO:
     return stream
 
 
+def build_item_list_export() -> BytesIO:
+    payload = (
+        "Item Id\tItem Name \t Cases Size \t Tax Rate\t Item PTR\t Status\n"
+        "1\tExisting SKU Alpha\t12\t7.5\t999\tActive\n"
+        "2\tFresh SKU Beta\t24\t\t3450\tActive\n"
+    )
+    return BytesIO(payload.encode("utf-8"))
+
+
 def test_end_to_end_review_and_alias_memory() -> None:
     with TemporaryDirectory() as temp_dir:
         app = create_app(
@@ -349,5 +358,64 @@ def test_tracker_import_accepts_mon_test_sheet_name() -> None:
         assert "/review" in response.headers["Location"]
 
         with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_item_list_export_can_merge_into_uom_without_replacing_existing() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        workbook = build_test_workbook()
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(workbook.getvalue()), "uom.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+
+        response = client.post(
+            "/products",
+            data={
+                "sku_name": "Existing SKU Alpha",
+                "price": "1200",
+                "vatable": "yes",
+                "uom": "ctn",
+                "alt_uom": "pcs",
+                "conversion": "12",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+
+        item_list = build_item_list_export()
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(item_list.getvalue()), "item_list (5).xls")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "1 new product rows were added and 1 existing items were skipped" in html
+
+        with app.app_context():
+            existing = db.session.query(Product).filter_by(sku_name="Existing SKU Alpha").one()
+            fresh = db.session.query(Product).filter_by(sku_name="Fresh SKU Beta").one()
+            assert float(existing.price) == 1200.0
+            assert fresh.is_active is True
+            assert float(fresh.price) == 3450.0
+            assert fresh.uom == "ctn"
+            assert fresh.alt_uom == "unt"
+            assert fresh.vatable is False
             db.session.remove()
             db.engine.dispose()

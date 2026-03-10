@@ -37,7 +37,7 @@
             <form class="sidebar-form" action="{{ url_for('upload_uom') }}" method="post" enctype="multipart/form-data">
               <label class="sidebar-upload">
                 <span class="field-label">Replace UOM</span>
-                <input name="uom_workbook" type="file" accept=".xlsx" required>
+                <input name="uom_workbook" type="file" accept=".xlsx,.xls,.tsv,.txt" required>
               </label>
               <button class="sidebar-button" type="submit">Update source</button>
             </form>
