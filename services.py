@@ -82,9 +82,19 @@ class UnresolvedGroup:
 
 
 @dataclass
+class IgnoredGroup:
+    source_sku: str
+    occurrences: int
+    order_numbers: list[str]
+    supermarkets: list[str]
+    reason: str
+
+
+@dataclass
 class RunSummary:
     run: UploadRun
     unresolved_groups: list[UnresolvedGroup]
+    ignored_groups: list[IgnoredGroup]
     ready_lines: int
     ignored_lines: int
 
@@ -373,13 +383,41 @@ def build_run_summary(run_id: str) -> RunSummary | None:
         )
 
     groups.sort(key=lambda item: item.source_sku)
+    ignored_line_items = list(
+        db.session.scalars(
+            select(UploadLine).where(UploadLine.run_id == run_id, UploadLine.status == "ignored")
+        )
+    )
+    ignored_grouped: dict[str, list[UploadLine]] = {}
+    for line in ignored_line_items:
+        ignored_grouped.setdefault(line.source_sku, []).append(line)
+
+    ignored_groups = []
+    for source_sku, lines in ignored_grouped.items():
+        ignored_groups.append(
+            IgnoredGroup(
+                source_sku=source_sku,
+                occurrences=len(lines),
+                order_numbers=sorted({line.order_number for line in lines}),
+                supermarkets=sorted({line.supermarket_name for line in lines}),
+                reason="Inactive product",
+            )
+        )
+
+    ignored_groups.sort(key=lambda item: item.source_sku)
     ready_lines = db.session.scalar(
         select(func.count(UploadLine.id)).where(UploadLine.run_id == run_id, UploadLine.status == "ready")
     ) or 0
     ignored_lines = db.session.scalar(
         select(func.count(UploadLine.id)).where(UploadLine.run_id == run_id, UploadLine.status == "ignored")
     ) or 0
-    return RunSummary(run=run, unresolved_groups=groups, ready_lines=ready_lines, ignored_lines=ignored_lines)
+    return RunSummary(
+        run=run,
+        unresolved_groups=groups,
+        ignored_groups=ignored_groups,
+        ready_lines=ready_lines,
+        ignored_lines=ignored_lines,
+    )
 
 
 def apply_review_decisions(run_id: str, mapping: dict[str, int]) -> UploadRun:
@@ -416,15 +454,52 @@ def apply_review_decisions(run_id: str, mapping: dict[str, int]) -> UploadRun:
         for line in lines:
             apply_product_to_line(line, product, "approved-alias")
 
-    run.rows_ready = db.session.scalar(
-        select(func.count(UploadLine.id)).where(UploadLine.run_id == run_id, UploadLine.status == "ready")
-    ) or 0
-    run.rows_needing_review = db.session.scalar(
-        select(func.count(UploadLine.id)).where(UploadLine.run_id == run_id, UploadLine.status == "needs_review")
-    ) or 0
-    run.status = "ready" if run.rows_needing_review == 0 else "needs_review"
+    _refresh_run_totals(run)
     db.session.commit()
     return run
+
+
+def mark_source_sku_inactive(run_id: str, source_sku: str) -> tuple[UploadRun, Product]:
+    run = db.session.get(UploadRun, run_id)
+    if run is None:
+        raise WorkbookShapeError("This upload run could not be found.")
+
+    sku_name = _string_value(source_sku)
+    if not sku_name:
+        raise WorkbookShapeError("The source SKU to mark inactive was empty.")
+
+    product = db.session.scalar(select(Product).where(Product.sku_name == sku_name))
+    if product is None:
+        product = Product(
+            sku_name=sku_name,
+            normalized_name=normalize_sku(sku_name),
+            is_active=False,
+            source_import_id=None,
+        )
+        db.session.add(product)
+        db.session.flush()
+    else:
+        product.is_active = False
+
+    lines = list(
+        db.session.scalars(
+            select(UploadLine).where(UploadLine.run_id == run_id, UploadLine.source_sku == sku_name)
+        )
+    )
+    if not lines:
+        raise WorkbookShapeError(f"No review lines were found for '{sku_name}'.")
+
+    for line in lines:
+        line.status = "ignored"
+        line.matched_by = "inactive"
+        line.product_id = product.id
+        line.resolved_sku_name = product.sku_name
+        line.resolved_rate = None
+        line.resolved_vatable = False
+
+    _refresh_run_totals(run)
+    db.session.commit()
+    return run, product
 
 
 def export_run_to_xls(run_id: str) -> tuple[str, bytes]:
@@ -565,6 +640,16 @@ def apply_product_to_line(line: UploadLine, product: Product, match_method: str)
     line.resolved_sku_name = product.sku_name
     line.resolved_rate = product.price
     line.resolved_vatable = bool(product.vatable)
+
+
+def _refresh_run_totals(run: UploadRun) -> None:
+    run.rows_ready = db.session.scalar(
+        select(func.count(UploadLine.id)).where(UploadLine.run_id == run.id, UploadLine.status == "ready")
+    ) or 0
+    run.rows_needing_review = db.session.scalar(
+        select(func.count(UploadLine.id)).where(UploadLine.run_id == run.id, UploadLine.status == "needs_review")
+    ) or 0
+    run.status = "ready" if run.rows_needing_review == 0 else "needs_review"
 
 
 def _load_workbook_from_upload(file_storage: Any):

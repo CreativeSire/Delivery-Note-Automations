@@ -1018,6 +1018,10 @@ h2 {
   grid-template-columns: minmax(0, 2.4fr) 70px minmax(0, 1.5fr);
 }
 
+.table-line-ignored {
+  grid-template-columns: minmax(0, 2.2fr) 70px minmax(0, 1.6fr) 140px;
+}
+
 .row-actions {
   display: flex;
   gap: 12px;
@@ -1164,6 +1168,16 @@ h2 {
   background: linear-gradient(180deg, rgba(24, 50, 59, 0.03), rgba(24, 50, 59, 0.055));
 }
 
+.review-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(20, 51, 59, 0.08);
+}
+
 .review-actions-panel {
   display: flex;
   justify-content: space-between;
@@ -1222,6 +1236,7 @@ h2 {
   .table-line,
   .table-line-restore,
   .table-line-run,
+  .table-line-ignored,
   .table-line-admin,
   .table-line-dashboard,
   .health-rail,

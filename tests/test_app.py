@@ -487,3 +487,53 @@ def test_tracker_ignores_known_inactive_products() -> None:
         with app.app_context():
             db.session.remove()
             db.engine.dispose()
+
+
+def test_review_can_mark_source_sku_inactive_directly() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        workbook = build_test_workbook()
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(workbook.getvalue()), "uom.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        response = client.post(
+            "/runs/import",
+            data={"tracker_workbook": (BytesIO(workbook.getvalue()), "tracker.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+        run_id = response.headers["Location"].split("/runs/")[1].split("/")[0]
+
+        response = client.post(
+            f"/runs/{run_id}/review",
+            data={"mark_inactive": "SKU Vanila"},
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "was moved to inactive" in html
+        assert "Inactive items skipped" in html
+        assert "SKU Vanila" in html
+
+        with app.app_context():
+            inactive_product = db.session.query(Product).filter_by(sku_name="SKU Vanila").one()
+            run = db.session.get(UploadRun, run_id)
+            assert inactive_product.is_active is False
+            assert run is not None
+            assert run.rows_needing_review == 0
+            db.session.remove()
+            db.engine.dispose()

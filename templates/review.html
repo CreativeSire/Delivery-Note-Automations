@@ -84,6 +84,19 @@
               </optgroup>
             </select>
           </label>
+
+          <div class="review-inline-actions">
+            <button
+              class="text-button danger"
+              type="submit"
+              name="mark_inactive"
+              value="{{ group.source_sku }}"
+              formnovalidate
+            >
+              Mark inactive
+            </button>
+            <span class="field-hint">Use this when the product should stay out of current live operations until a future source file brings it back.</span>
+          </div>
         </section>
       {% endfor %}
     </div>

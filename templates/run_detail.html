@@ -54,4 +54,32 @@
       <p class="empty-state">Everything active is matched and ready.{% if summary.ignored_lines %} {{ summary.ignored_lines }} line(s) were ignored because they belong to inactive products.{% endif %}</p>
     {% endif %}
   </section>
+
+  {% if summary.ignored_groups %}
+    <section class="panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Ignored</p>
+          <h2>Inactive items skipped</h2>
+        </div>
+        <div class="header-chip">{{ summary.ignored_lines }} ignored</div>
+      </div>
+      <div class="data-table line-table">
+        <div class="table-line table-head-line table-line-ignored">
+          <span>Source SKU</span>
+          <span>Count</span>
+          <span>Stores</span>
+          <span>Reason</span>
+        </div>
+        {% for group in summary.ignored_groups %}
+          <div class="table-line table-line-ignored">
+            <span>{{ group.source_sku }}</span>
+            <span>{{ group.occurrences }}</span>
+            <span>{{ group.supermarkets|join(', ') }}</span>
+            <span>{{ group.reason }}</span>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
 {% endblock %}

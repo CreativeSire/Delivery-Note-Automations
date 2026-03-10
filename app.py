@@ -18,6 +18,7 @@ from services import (
     create_tracker_run,
     export_run_to_xls,
     import_uom_workbook,
+    mark_source_sku_inactive,
     save_product_master_entry,
     set_product_active,
 )
@@ -216,6 +217,22 @@ def create_app(test_config: dict | None = None) -> Flask:
         summary = build_run_summary(run_id)
         if summary is None:
             abort(404)
+
+        mark_inactive_sku = request.form.get("mark_inactive", "").strip()
+        if mark_inactive_sku:
+            try:
+                run, product = mark_source_sku_inactive(run_id, mark_inactive_sku)
+            except WorkbookShapeError as exc:
+                flash(str(exc), "error")
+                return redirect(url_for("review_run", run_id=run_id))
+
+            flash(
+                f"'{product.sku_name}' was moved to inactive. Future tracker runs will ignore it until a new source file brings it back.",
+                "warning",
+            )
+            if run.rows_needing_review > 0:
+                return redirect(url_for("review_run", run_id=run_id))
+            return redirect(url_for("view_run", run_id=run_id))
 
         mapping = {}
         for group in summary.unresolved_groups:
