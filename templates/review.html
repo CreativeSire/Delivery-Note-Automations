@@ -11,38 +11,89 @@
     <div class="header-chip">{{ summary.run.rows_needing_review }} pending</div>
   </section>
 
-  <form class="form-stack" action="{{ url_for('submit_review', run_id=summary.run.id) }}" method="post">
-    {% for group in summary.unresolved_groups %}
-      <section class="panel soft-panel">
-        <div class="panel-head compact">
-          <div>
-            <p class="eyebrow">Source SKU</p>
-            <h2>{{ group.source_sku }}</h2>
+  <section class="review-summary-grid">
+    <article class="panel review-summary-card">
+      <span class="panel-label">Run file</span>
+      <strong>{{ summary.run.original_filename }}</strong>
+      <span class="review-subtle">Invoice {{ summary.run.invoice_date }}</span>
+    </article>
+    <article class="panel review-summary-card">
+      <span class="panel-label">Pending groups</span>
+      <strong>{{ summary.unresolved_groups|length }}</strong>
+      <span class="review-subtle">new product names to map</span>
+    </article>
+    <article class="panel review-summary-card">
+      <span class="panel-label">Affected lines</span>
+      <strong>{{ summary.run.rows_needing_review }}</strong>
+      <span class="review-subtle">rows waiting for approval</span>
+    </article>
+  </section>
+
+  <form class="review-form" action="{{ url_for('submit_review', run_id=summary.run.id) }}" method="post">
+    <div class="review-card-stack">
+      {% for group in summary.unresolved_groups %}
+        {% set suggested_ids = group.suggestions | map(attribute='id') | list %}
+        <section class="panel review-card">
+          <div class="review-card-head">
+            <div class="review-source-block">
+              <p class="eyebrow">Incoming SKU</p>
+              <h2>{{ group.source_sku }}</h2>
+            </div>
+            <div class="review-count-badge">{{ group.occurrences }} line{% if group.occurrences != 1 %}s{% endif %}</div>
           </div>
-          <div class="header-chip">{{ group.occurrences }} line(s)</div>
-        </div>
 
-        <div class="review-details">
-          <p><strong>Stores:</strong> {{ group.supermarkets|join(', ') }}</p>
-          <p><strong>Orders:</strong> {{ group.order_numbers|join(', ') }}</p>
-        </div>
+          <div class="review-meta-grid">
+            <div class="review-meta-box">
+              <span class="metric-label">Orders</span>
+              <strong>{{ group.order_numbers|length }}</strong>
+              <small>{{ group.order_numbers|join(', ') }}</small>
+            </div>
+            <div class="review-meta-box">
+              <span class="metric-label">Stores</span>
+              <strong>{{ group.supermarkets|length }}</strong>
+              <small>{{ group.supermarkets|join(', ') }}</small>
+            </div>
+          </div>
 
-        <label class="field">
-          <span class="field-label">Correct product</span>
-          <select name="resolution::{{ group.source_sku }}" required>
-            <option value="">Select the correct product</option>
-            {% for product in group.suggestions %}
-              <option value="{{ product.id }}">Suggested: {{ product.sku_name }}</option>
-            {% endfor %}
-            {% for product in all_products %}
-              <option value="{{ product.id }}">{{ product.sku_name }}</option>
-            {% endfor %}
-          </select>
-        </label>
-      </section>
-    {% endfor %}
+          {% if group.suggestions %}
+            <div class="review-hints">
+              <span class="field-label">Closest matches</span>
+              <div class="suggestion-chip-row">
+                {% for product in group.suggestions %}
+                  <span class="suggestion-chip">{{ product.sku_name }}</span>
+                {% endfor %}
+              </div>
+            </div>
+          {% endif %}
 
-    <section class="panel">
+          <label class="field review-select-field">
+            <span class="field-label">Map to product</span>
+            <select name="resolution::{{ group.source_sku }}" required>
+              <option value="">Choose product</option>
+              {% if group.suggestions %}
+                <optgroup label="Suggested matches">
+                  {% for product in group.suggestions %}
+                    <option value="{{ product.id }}">{{ product.sku_name }}</option>
+                  {% endfor %}
+                </optgroup>
+              {% endif %}
+              <optgroup label="All active products">
+                {% for product in all_products if product.id not in suggested_ids %}
+                  <option value="{{ product.id }}">{{ product.sku_name }}</option>
+                {% endfor %}
+              </optgroup>
+            </select>
+          </label>
+        </section>
+      {% endfor %}
+    </div>
+
+    <section class="panel review-actions-panel">
+      <div class="review-actions-copy">
+        <span class="panel-label">Approval</span>
+        <strong>Save these product links</strong>
+        <span class="review-subtle">Approved names will be remembered for future tracker runs.</span>
+      </div>
       <div class="actions">
         <button class="primary-button" type="submit">Save corrections</button>
         <a class="secondary-button" href="{{ url_for('view_run', run_id=summary.run.id) }}">Back to run</a>
