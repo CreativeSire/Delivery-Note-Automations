@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 
 from openpyxl import Workbook
 
-from app import create_app
+from app import _database_uri, create_app
 from models import Product, ProductAlias, UploadRun, db
 
 
@@ -107,5 +107,68 @@ def test_end_to_end_review_and_alias_memory() -> None:
             assert alias is not None
             assert run is not None
             assert run.status == "exported"
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_database_url_uses_psycopg_driver(monkeypatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:pass@db.example.com:5432/delivery")
+    assert _database_uri("unused") == "postgresql+psycopg://user:pass@db.example.com:5432/delivery"
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com:5432/delivery")
+    assert _database_uri("unused") == "postgresql+psycopg://user:pass@db.example.com:5432/delivery"
+
+
+def test_uom_import_sets_active_source_of_truth() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+
+        first = Workbook()
+        uom_one = first.active
+        uom_one.title = "UOM"
+        uom_one.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
+        uom_one.append(["SKU Alpha", "ctn", "unt", 12, "Yes", 100])
+        uom_one.append(["SKU Vanilla", "ctn", "unt", 12, "No", 80])
+        first_bytes = BytesIO()
+        first.save(first_bytes)
+        first_bytes.seek(0)
+
+        second = Workbook()
+        uom_two = second.active
+        uom_two.title = "UOM"
+        uom_two.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
+        uom_two.append(["SKU Alpha", "ctn", "unt", 12, "Yes", 120])
+        second_bytes = BytesIO()
+        second.save(second_bytes)
+        second_bytes.seek(0)
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(first_bytes.getvalue()), "uom-one.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(second_bytes.getvalue()), "uom-two.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        with app.app_context():
+            alpha = db.session.query(Product).filter_by(sku_name="SKU Alpha").one()
+            vanilla = db.session.query(Product).filter_by(sku_name="SKU Vanilla").one()
+            assert alpha.is_active is True
+            assert float(alpha.price) == 120.0
+            assert vanilla.is_active is False
             db.session.remove()
             db.engine.dispose()

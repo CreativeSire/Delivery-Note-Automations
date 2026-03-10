@@ -147,9 +147,13 @@ def create_app(test_config: dict | None = None) -> Flask:
 
 
 def _database_uri(instance_path: str) -> str:
-    database_url = os.environ.get("DATABASE_URL")
+    database_url = os.environ.get("DATABASE_URL", "").strip()
     if database_url:
-        return database_url.replace("postgres://", "postgresql://", 1)
+        if database_url.startswith("postgres://"):
+            return database_url.replace("postgres://", "postgresql+psycopg://", 1)
+        if database_url.startswith("postgresql://") and not database_url.startswith("postgresql+psycopg://"):
+            return database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+        return database_url
     return f"sqlite:///{Path(instance_path) / 'delivery_note.db'}"
 
 

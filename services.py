@@ -101,16 +101,23 @@ def import_uom_workbook(file_storage: Any) -> UomImport:
     db.session.add(import_log)
     db.session.flush()
 
+    existing_products = {
+        product.sku_name: product for product in db.session.scalars(select(Product))
+    }
+    for product in existing_products.values():
+        product.is_active = False
+
     imported = 0
     for row_index in range(2, sheet.max_row + 1):
         sku_name = _string_value(sheet.cell(row_index, 1).value)
         if not sku_name:
             continue
 
-        product = db.session.scalar(select(Product).where(Product.sku_name == sku_name))
+        product = existing_products.get(sku_name)
         if product is None:
             product = Product(sku_name=sku_name, normalized_name=normalize_sku(sku_name))
             db.session.add(product)
+            existing_products[sku_name] = product
 
         product.normalized_name = normalize_sku(sku_name)
         product.uom = _string_value(sheet.cell(row_index, 2).value) or None
@@ -348,7 +355,7 @@ def resolve_product_match(source_sku: str, products: list[Product], aliases: lis
     alias = alias_lookup.get(source_sku)
     if alias is not None:
         product = db.session.get(Product, alias.product_id)
-        if product is not None:
+        if product is not None and product.is_active:
             return ProductMatch(product, "approved-alias")
 
     normalized = normalize_sku(source_sku)
@@ -359,7 +366,7 @@ def resolve_product_match(source_sku: str, products: list[Product], aliases: lis
     normalized_aliases = [alias for alias in aliases if alias.normalized_name == normalized]
     if len(normalized_aliases) == 1:
         product = db.session.get(Product, normalized_aliases[0].product_id)
-        if product is not None:
+        if product is not None and product.is_active:
             return ProductMatch(product, "approved-alias")
 
     return None
