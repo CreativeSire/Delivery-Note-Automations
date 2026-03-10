@@ -11,10 +11,10 @@ from models import Product, ProductAlias, UploadRun, db
 from services import bootstrap_seed_uom_if_empty
 
 
-def build_test_workbook() -> BytesIO:
+def build_test_workbook(sheet_name: str = "tracker") -> BytesIO:
     workbook = Workbook()
     tracker = workbook.active
-    tracker.title = "tracker"
+    tracker.title = sheet_name
     tracker.append(["Sales Order Number", "Stores", "SKU Alpha", "SKU Vanila"])
     tracker.append(["SO-100", "Market One", 2, 0.5])
     tracker.append(["SO-101", "Market Two", 1, 0])
@@ -96,7 +96,7 @@ def test_end_to_end_review_and_alias_memory() -> None:
         assert response.status_code == 200
         html = response.get_data(as_text=True)
         assert "rows are now ready for export" in html
-        assert "Download `.xls`" in html
+        assert "Download XLS" in html
 
         download = client.get(f"/runs/{run_id}/download")
         assert download.status_code == 200
@@ -315,5 +315,39 @@ def test_seed_bootstrap_populates_database_when_empty() -> None:
             assert seeded is not None
             assert seeded.product_count > 0
             assert db.session.query(Product).count() == seeded.product_count
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_tracker_import_accepts_mon_test_sheet_name() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        workbook = build_test_workbook("Mon_Test")
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(workbook.getvalue()), "uom.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        response = client.post(
+            "/runs/import",
+            data={"tracker_workbook": (BytesIO(workbook.getvalue()), "LT-DN Test 2.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+        assert "/review" in response.headers["Location"]
+
+        with app.app_context():
             db.session.remove()
             db.engine.dispose()

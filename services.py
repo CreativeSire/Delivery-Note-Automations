@@ -22,6 +22,9 @@ TRACKER_SHEET = "tracker"
 UOM_SHEET = "UOM"
 TEMPLATE_SHEET = "Delivery Invoice"
 DATE_FORMAT = "%Y-%m-%d"
+TRACKER_ORDER_HEADERS = {"sales order number", "order number"}
+TRACKER_STORE_HEADERS = {"stores", "store", "supermarket", "supermarket name"}
+TRACKER_MIN_COLUMNS = 8
 OUTPUT_HEADERS = [
     "Invoice Date",
     "Order Number",
@@ -229,10 +232,7 @@ def set_product_active(product_id: int, is_active: bool) -> Product:
 
 def create_tracker_run(file_storage: Any, timezone_name: str) -> UploadRun:
     workbook = _load_workbook_from_upload(file_storage)
-    if TRACKER_SHEET not in workbook.sheetnames:
-        raise WorkbookShapeError(f"The workbook must contain a '{TRACKER_SHEET}' sheet.")
-
-    sheet = workbook[TRACKER_SHEET]
+    sheet = _resolve_tracker_sheet(workbook)
     product_headers = []
     for column_index in range(3, sheet.max_column + 1):
         value = _string_value(sheet.cell(1, column_index).value)
@@ -528,3 +528,69 @@ def _decimal_value(value: Any) -> Decimal | None:
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
+
+
+def _resolve_tracker_sheet(workbook: Any):
+    best_sheet = None
+    best_score = 0
+
+    for sheet_name in workbook.sheetnames:
+        sheet = workbook[sheet_name]
+        score = _tracker_sheet_score(sheet)
+        if _normalize_header(sheet_name) == TRACKER_SHEET:
+            score += 2
+        if score > best_score:
+            best_score = score
+            best_sheet = sheet
+
+    if best_sheet is not None and best_score >= 8:
+        return best_sheet
+
+    raise WorkbookShapeError(
+        "We could not find the sheet that contains order numbers, store names, and product quantities."
+    )
+
+
+def _looks_like_tracker_sheet(sheet: Any) -> bool:
+    return _tracker_sheet_score(sheet) >= 8
+
+
+def _tracker_sheet_score(sheet: Any) -> int:
+    if sheet.max_row < 2 or sheet.max_column < 3:
+        return 0
+
+    first_header = _normalize_header(sheet.cell(1, 1).value)
+    second_header = _normalize_header(sheet.cell(1, 2).value)
+    product_headers = sum(1 for column_index in range(3, sheet.max_column + 1) if _string_value(sheet.cell(1, column_index).value))
+    sample_rows = min(sheet.max_row, 8)
+    row_identity_hits = 0
+    quantity_hits = 0
+
+    for row_index in range(2, sample_rows + 1):
+        if _string_value(sheet.cell(row_index, 1).value) and _string_value(sheet.cell(row_index, 2).value):
+            row_identity_hits += 1
+
+        for column_index in range(3, min(sheet.max_column, 20) + 1):
+            value = _decimal_value(sheet.cell(row_index, column_index).value)
+            if value is not None:
+                quantity_hits += 1
+                break
+
+    score = 0
+    if sheet.max_column >= TRACKER_MIN_COLUMNS:
+        score += 4
+    if first_header in TRACKER_ORDER_HEADERS:
+        score += 4
+    if second_header in TRACKER_STORE_HEADERS:
+        score += 4
+    if product_headers >= 5:
+        score += 2
+    if row_identity_hits >= 1:
+        score += 2
+    if quantity_hits >= 1:
+        score += 4
+    return score
+
+
+def _normalize_header(value: Any) -> str:
+    return " ".join(_string_value(value).lower().split())

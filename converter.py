@@ -13,6 +13,9 @@ from openpyxl import load_workbook
 TRACKER_SHEET = "tracker"
 UOM_SHEET = "UOM"
 TEMPLATE_SHEET = "Delivery Invoice"
+TRACKER_ORDER_HEADERS = {"sales order number", "order number"}
+TRACKER_STORE_HEADERS = {"stores", "store", "supermarket", "supermarket name"}
+TRACKER_MIN_COLUMNS = 8
 VOUCHER_TYPE_NAME = "Delivery Invoice"
 SALES_LEDGER_NAME = "Inventory Pool"
 VAT_LABEL = "VAT"
@@ -57,7 +60,7 @@ class ConversionResult:
 
 def inspect_workbook(workbook_path: Path, timezone_name: str) -> WorkbookInspection:
     workbook = load_workbook(workbook_path, data_only=True)
-    tracker = _require_sheet(workbook, TRACKER_SHEET)
+    tracker = _resolve_tracker_sheet(workbook)
     uom = _require_sheet(workbook, UOM_SHEET)
     template = _require_sheet(workbook, TEMPLATE_SHEET)
 
@@ -108,7 +111,7 @@ def convert_workbook(
     price_overrides: dict[str, Decimal] | None = None,
 ) -> ConversionResult:
     workbook = load_workbook(workbook_path, data_only=True)
-    tracker = _require_sheet(workbook, TRACKER_SHEET)
+    tracker = _resolve_tracker_sheet(workbook)
     uom = _require_sheet(workbook, UOM_SHEET)
     template = _require_sheet(workbook, TEMPLATE_SHEET)
 
@@ -234,6 +237,27 @@ def _require_sheet(workbook: Any, sheet_name: str) -> Any:
     return workbook[sheet_name]
 
 
+def _resolve_tracker_sheet(workbook: Any) -> Any:
+    best_sheet = None
+    best_score = 0
+
+    for sheet_name in workbook.sheetnames:
+        sheet = workbook[sheet_name]
+        score = _tracker_sheet_score(sheet)
+        if _normalize_header(sheet_name) == TRACKER_SHEET:
+            score += 2
+        if score > best_score:
+            best_score = score
+            best_sheet = sheet
+
+    if best_sheet is not None and best_score >= 8:
+        return best_sheet
+
+    raise MissingSheetError(
+        "A tracker-style sheet with order numbers, store names, and product quantities is missing."
+    )
+
+
 def _tracker_product_headers(tracker_sheet: Any) -> list[tuple[int, str]]:
     headers: list[tuple[int, str]] = []
     for column_index in range(3, tracker_sheet.max_column + 1):
@@ -285,6 +309,51 @@ def _decimal_quantity(value: Any) -> Decimal | None:
 def _tomorrow_in_timezone(timezone_name: str) -> datetime:
     now = datetime.now(ZoneInfo(timezone_name))
     return now + timedelta(days=1)
+
+
+def _looks_like_tracker_sheet(sheet: Any) -> bool:
+    return _tracker_sheet_score(sheet) >= 8
+
+
+def _tracker_sheet_score(sheet: Any) -> int:
+    if sheet.max_row < 2 or sheet.max_column < 3:
+        return 0
+
+    first_header = _normalize_header(sheet.cell(1, 1).value)
+    second_header = _normalize_header(sheet.cell(1, 2).value)
+    product_headers = sum(1 for column_index in range(3, sheet.max_column + 1) if _string_value(sheet.cell(1, column_index).value))
+    sample_rows = min(sheet.max_row, 8)
+    row_identity_hits = 0
+    quantity_hits = 0
+
+    for row_index in range(2, sample_rows + 1):
+        if _string_value(sheet.cell(row_index, 1).value) and _string_value(sheet.cell(row_index, 2).value):
+            row_identity_hits += 1
+
+        for column_index in range(3, min(sheet.max_column, 20) + 1):
+            value = _decimal_quantity(sheet.cell(row_index, column_index).value)
+            if value is not None:
+                quantity_hits += 1
+                break
+
+    score = 0
+    if sheet.max_column >= TRACKER_MIN_COLUMNS:
+        score += 4
+    if first_header in TRACKER_ORDER_HEADERS:
+        score += 4
+    if second_header in TRACKER_STORE_HEADERS:
+        score += 4
+    if product_headers >= 5:
+        score += 2
+    if row_identity_hits >= 1:
+        score += 2
+    if quantity_hits >= 1:
+        score += 4
+    return score
+
+
+def _normalize_header(value: Any) -> str:
+    return " ".join(_string_value(value).lower().split())
 
 
 def _column_width(header: str) -> int:

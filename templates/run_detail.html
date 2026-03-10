@@ -21,7 +21,7 @@
       {% if summary.run.rows_needing_review > 0 %}
         <a class="primary-button" href="{{ url_for('review_run', run_id=summary.run.id) }}">Review unresolved SKUs</a>
       {% else %}
-        <a class="primary-button" href="{{ url_for('download_run', run_id=summary.run.id) }}">Download `.xls`</a>
+        <a class="primary-button" href="{{ url_for('download_run', run_id=summary.run.id) }}">Download XLS</a>
       {% endif %}
       <a class="secondary-button" href="{{ url_for('index') }}">Back to dashboard</a>
     </div>
