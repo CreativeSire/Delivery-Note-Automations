@@ -1,0 +1,430 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
+from difflib import SequenceMatcher
+from io import BytesIO
+from typing import Any
+from uuid import uuid4
+from zoneinfo import ZoneInfo
+
+import xlwt
+from flask import current_app
+from openpyxl import load_workbook
+from sqlalchemy import func, select
+
+from models import Product, ProductAlias, UploadLine, UploadRun, UomImport, db
+
+TRACKER_SHEET = "tracker"
+UOM_SHEET = "UOM"
+TEMPLATE_SHEET = "Delivery Invoice"
+DATE_FORMAT = "%Y-%m-%d"
+OUTPUT_HEADERS = [
+    "Invoice Date",
+    "Order Number",
+    "Voucher Type Name",
+    "Party name",
+    "stock Item Name",
+    "Quantity",
+    "Rate",
+    "Amount",
+    "SalesLedger Name",
+    "VAT",
+    "VAT%",
+    "VAT Amount",
+]
+VOUCHER_TYPE_NAME = "Delivery Invoice"
+SALES_LEDGER_NAME = "Inventory Pool"
+VAT_LABEL = "VAT"
+VAT_RATE = Decimal("7.5")
+
+
+class ServiceError(Exception):
+    pass
+
+
+class WorkbookShapeError(ServiceError):
+    pass
+
+
+@dataclass
+class DashboardSummary:
+    product_count: int
+    alias_count: int
+    import_count: int
+    run_count: int
+    recent_imports: list[UomImport]
+    recent_runs: list[UploadRun]
+
+
+@dataclass
+class ProductMatch:
+    product: Product
+    match_method: str
+
+
+@dataclass
+class UnresolvedGroup:
+    source_sku: str
+    occurrences: int
+    order_numbers: list[str]
+    supermarkets: list[str]
+    suggestions: list[Product]
+
+
+@dataclass
+class RunSummary:
+    run: UploadRun
+    unresolved_groups: list[UnresolvedGroup]
+    ready_lines: int
+
+
+def build_dashboard_summary() -> DashboardSummary:
+    return DashboardSummary(
+        product_count=db.session.scalar(select(func.count(Product.id))) or 0,
+        alias_count=db.session.scalar(select(func.count(ProductAlias.id))) or 0,
+        import_count=db.session.scalar(select(func.count(UomImport.id))) or 0,
+        run_count=db.session.scalar(select(func.count(UploadRun.id))) or 0,
+        recent_imports=list(db.session.scalars(select(UomImport).order_by(UomImport.created_at.desc()).limit(5))),
+        recent_runs=list(db.session.scalars(select(UploadRun).order_by(UploadRun.created_at.desc()).limit(8))),
+    )
+
+
+def import_uom_workbook(file_storage: Any) -> UomImport:
+    workbook = _load_workbook_from_upload(file_storage)
+    if UOM_SHEET not in workbook.sheetnames:
+        raise WorkbookShapeError(f"The workbook must contain a '{UOM_SHEET}' sheet.")
+
+    sheet = workbook[UOM_SHEET]
+    import_log = UomImport(filename=file_storage.filename or "uom.xlsx", product_count=0)
+    db.session.add(import_log)
+    db.session.flush()
+
+    imported = 0
+    for row_index in range(2, sheet.max_row + 1):
+        sku_name = _string_value(sheet.cell(row_index, 1).value)
+        if not sku_name:
+            continue
+
+        product = db.session.scalar(select(Product).where(Product.sku_name == sku_name))
+        if product is None:
+            product = Product(sku_name=sku_name, normalized_name=normalize_sku(sku_name))
+            db.session.add(product)
+
+        product.normalized_name = normalize_sku(sku_name)
+        product.uom = _string_value(sheet.cell(row_index, 2).value) or None
+        product.alt_uom = _string_value(sheet.cell(row_index, 3).value) or None
+        product.conversion = _decimal_value(sheet.cell(row_index, 4).value)
+        product.vatable = _string_value(sheet.cell(row_index, 5).value).lower() == "yes"
+        product.price = _decimal_value(sheet.cell(row_index, 6).value)
+        product.is_active = True
+        product.source_import_id = import_log.id
+        imported += 1
+
+    import_log.product_count = imported
+    db.session.commit()
+    return import_log
+
+
+def create_tracker_run(file_storage: Any, timezone_name: str) -> UploadRun:
+    workbook = _load_workbook_from_upload(file_storage)
+    if TRACKER_SHEET not in workbook.sheetnames:
+        raise WorkbookShapeError(f"The workbook must contain a '{TRACKER_SHEET}' sheet.")
+
+    sheet = workbook[TRACKER_SHEET]
+    product_headers = []
+    for column_index in range(3, sheet.max_column + 1):
+        value = _string_value(sheet.cell(1, column_index).value)
+        if value:
+            product_headers.append((column_index, value))
+
+    run = UploadRun(
+        id=uuid4().hex,
+        original_filename=file_storage.filename or "tracker.xlsx",
+        invoice_date=tomorrow_in_timezone(timezone_name).strftime(DATE_FORMAT),
+        status="needs_review",
+        rows_detected=0,
+        rows_ready=0,
+        rows_needing_review=0,
+    )
+    db.session.add(run)
+    db.session.flush()
+
+    products = list(db.session.scalars(select(Product).where(Product.is_active.is_(True))))
+    aliases = list(db.session.scalars(select(ProductAlias)))
+
+    for row_index in range(2, sheet.max_row + 1):
+        order_number = _string_value(sheet.cell(row_index, 1).value)
+        supermarket = _string_value(sheet.cell(row_index, 2).value)
+        if not order_number and not supermarket:
+            continue
+
+        for column_index, sku_name in product_headers:
+            quantity = _decimal_value(sheet.cell(row_index, column_index).value)
+            if quantity is None or quantity <= Decimal("0"):
+                continue
+
+            run.rows_detected += 1
+            line = UploadLine(
+                run_id=run.id,
+                order_number=order_number,
+                supermarket_name=supermarket,
+                source_sku=sku_name,
+                normalized_source_sku=normalize_sku(sku_name),
+                quantity=quantity,
+            )
+
+            match = resolve_product_match(sku_name, products, aliases)
+            if match is None or match.product.price is None:
+                line.status = "needs_review"
+                run.rows_needing_review += 1
+            else:
+                apply_product_to_line(line, match.product, match.match_method)
+                run.rows_ready += 1
+
+            db.session.add(line)
+
+    run.status = "ready" if run.rows_needing_review == 0 else "needs_review"
+    db.session.commit()
+    return run
+
+
+def build_run_summary(run_id: str) -> RunSummary | None:
+    run = db.session.get(UploadRun, run_id)
+    if run is None:
+        return None
+
+    unresolved_lines = list(
+        db.session.scalars(
+            select(UploadLine).where(UploadLine.run_id == run_id, UploadLine.status == "needs_review")
+        )
+    )
+
+    grouped: dict[str, list[UploadLine]] = {}
+    for line in unresolved_lines:
+        grouped.setdefault(line.source_sku, []).append(line)
+
+    products = list(db.session.scalars(select(Product).where(Product.is_active.is_(True))))
+    groups = []
+    for source_sku, lines in grouped.items():
+        groups.append(
+            UnresolvedGroup(
+                source_sku=source_sku,
+                occurrences=len(lines),
+                order_numbers=sorted({line.order_number for line in lines}),
+                supermarkets=sorted({line.supermarket_name for line in lines}),
+                suggestions=suggest_products(source_sku, products),
+            )
+        )
+
+    groups.sort(key=lambda item: item.source_sku)
+    ready_lines = db.session.scalar(
+        select(func.count(UploadLine.id)).where(UploadLine.run_id == run_id, UploadLine.status == "ready")
+    ) or 0
+    return RunSummary(run=run, unresolved_groups=groups, ready_lines=ready_lines)
+
+
+def apply_review_decisions(run_id: str, mapping: dict[str, int]) -> UploadRun:
+    run = db.session.get(UploadRun, run_id)
+    if run is None:
+        raise WorkbookShapeError("This upload run could not be found.")
+
+    for source_sku, product_id in mapping.items():
+        product = db.session.get(Product, product_id)
+        if product is None:
+            raise WorkbookShapeError(f"Selected product for '{source_sku}' could not be found.")
+        if product.price is None:
+            raise WorkbookShapeError(f"'{product.sku_name}' still has no price in the UOM master.")
+
+        alias = db.session.scalar(select(ProductAlias).where(ProductAlias.alias_name == source_sku))
+        if alias is None:
+            alias = ProductAlias(
+                alias_name=source_sku,
+                normalized_name=normalize_sku(source_sku),
+                product_id=product.id,
+                match_method="approved-alias",
+            )
+            db.session.add(alias)
+        else:
+            alias.product_id = product.id
+            alias.normalized_name = normalize_sku(source_sku)
+            alias.match_method = "approved-alias"
+
+        lines = list(
+            db.session.scalars(
+                select(UploadLine).where(UploadLine.run_id == run_id, UploadLine.source_sku == source_sku)
+            )
+        )
+        for line in lines:
+            apply_product_to_line(line, product, "approved-alias")
+
+    run.rows_ready = db.session.scalar(
+        select(func.count(UploadLine.id)).where(UploadLine.run_id == run_id, UploadLine.status == "ready")
+    ) or 0
+    run.rows_needing_review = db.session.scalar(
+        select(func.count(UploadLine.id)).where(UploadLine.run_id == run_id, UploadLine.status == "needs_review")
+    ) or 0
+    run.status = "ready" if run.rows_needing_review == 0 else "needs_review"
+    db.session.commit()
+    return run
+
+
+def export_run_to_xls(run_id: str) -> tuple[str, bytes]:
+    run = db.session.get(UploadRun, run_id)
+    if run is None:
+        raise WorkbookShapeError("This upload run could not be found.")
+    if run.rows_needing_review > 0:
+        raise WorkbookShapeError("Resolve all review items before downloading the final file.")
+
+    lines = list(
+        db.session.scalars(select(UploadLine).where(UploadLine.run_id == run_id).order_by(UploadLine.id.asc()))
+    )
+    workbook = xlwt.Workbook()
+    sheet = workbook.add_sheet(TEMPLATE_SHEET)
+
+    header_style = xlwt.easyxf(
+        "font: bold on, height 240;"
+        "pattern: pattern solid, fore_colour ocean_blue;"
+        "align: horiz center;"
+        "borders: left thin, right thin, top thin, bottom thin;"
+    )
+    text_style = xlwt.easyxf("borders: left thin, right thin, top thin, bottom thin;")
+    date_style = xlwt.easyxf(
+        "borders: left thin, right thin, top thin, bottom thin;",
+        num_format_str="yyyy-mm-dd",
+    )
+    decimal_style = xlwt.easyxf(
+        "borders: left thin, right thin, top thin, bottom thin;",
+        num_format_str="0.00##",
+    )
+
+    for col_index, header in enumerate(OUTPUT_HEADERS):
+        sheet.write(0, col_index, header, header_style)
+        sheet.col(col_index).width = min(max(len(header) + 3, 14) * 256, 35 * 256)
+
+    for row_index, line in enumerate(lines, start=1):
+        amount = line.quantity * line.resolved_rate
+        vat_amount = (amount * VAT_RATE / Decimal("100")).quantize(Decimal("0.01")) if line.resolved_vatable else ""
+        row = [
+            run.invoice_date,
+            line.order_number,
+            VOUCHER_TYPE_NAME,
+            line.supermarket_name,
+            line.resolved_sku_name,
+            float(line.quantity),
+            float(line.resolved_rate),
+            float(amount),
+            SALES_LEDGER_NAME,
+            VAT_LABEL if line.resolved_vatable else "",
+            float(VAT_RATE) if line.resolved_vatable else "",
+            float(vat_amount) if vat_amount != "" else "",
+        ]
+
+        for col_index, value in enumerate(row):
+            if col_index == 0:
+                parsed = datetime.strptime(str(value), DATE_FORMAT)
+                sheet.write(row_index, col_index, parsed, date_style)
+            elif isinstance(value, (int, float)):
+                sheet.write(row_index, col_index, value, decimal_style)
+            else:
+                sheet.write(row_index, col_index, value, text_style)
+
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    run.status = "exported"
+    run.exported_at = datetime.now(ZoneInfo(current_app.config["APP_TIMEZONE"]))
+    db.session.commit()
+    return f"{run.id}-delivery-note.xls", stream.getvalue()
+
+
+def resolve_product_match(source_sku: str, products: list[Product], aliases: list[ProductAlias]) -> ProductMatch | None:
+    exact_lookup = {product.sku_name: product for product in products}
+    if source_sku in exact_lookup:
+        return ProductMatch(exact_lookup[source_sku], "exact")
+
+    alias_lookup = {alias.alias_name: alias for alias in aliases}
+    alias = alias_lookup.get(source_sku)
+    if alias is not None:
+        product = db.session.get(Product, alias.product_id)
+        if product is not None:
+            return ProductMatch(product, "approved-alias")
+
+    normalized = normalize_sku(source_sku)
+    normalized_products = [product for product in products if product.normalized_name == normalized]
+    if len(normalized_products) == 1:
+        return ProductMatch(normalized_products[0], "normalized")
+
+    normalized_aliases = [alias for alias in aliases if alias.normalized_name == normalized]
+    if len(normalized_aliases) == 1:
+        product = db.session.get(Product, normalized_aliases[0].product_id)
+        if product is not None:
+            return ProductMatch(product, "approved-alias")
+
+    return None
+
+
+def suggest_products(source_sku: str, products: list[Product], limit: int = 5) -> list[Product]:
+    normalized = normalize_sku(source_sku)
+    ranked = []
+    for product in products:
+        score = SequenceMatcher(None, normalized, product.normalized_name).ratio()
+        if score >= 0.42:
+            ranked.append((score, product))
+
+    ranked.sort(key=lambda item: (-item[0], item[1].sku_name))
+    suggestions = []
+    seen = set()
+    for _, product in ranked:
+        if product.id in seen:
+            continue
+        suggestions.append(product)
+        seen.add(product.id)
+        if len(suggestions) == limit:
+            break
+    return suggestions
+
+
+def normalize_sku(value: str) -> str:
+    cleaned = []
+    for character in value.upper():
+        cleaned.append(character if character.isalnum() else " ")
+    return " ".join("".join(cleaned).split())
+
+
+def tomorrow_in_timezone(timezone_name: str) -> datetime:
+    return datetime.now(ZoneInfo(timezone_name)) + timedelta(days=1)
+
+
+def apply_product_to_line(line: UploadLine, product: Product, match_method: str) -> None:
+    line.product_id = product.id
+    line.status = "ready"
+    line.matched_by = match_method
+    line.resolved_sku_name = product.sku_name
+    line.resolved_rate = product.price
+    line.resolved_vatable = bool(product.vatable)
+
+
+def _load_workbook_from_upload(file_storage: Any):
+    payload = file_storage.read()
+    file_storage.stream.seek(0)
+    try:
+        return load_workbook(BytesIO(payload), data_only=True)
+    except Exception as exc:  # pragma: no cover
+        raise WorkbookShapeError("The uploaded file could not be read as an Excel workbook.") from exc
+
+
+def _string_value(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _decimal_value(value: Any) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None

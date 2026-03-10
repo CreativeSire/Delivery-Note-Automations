@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Run {{ summary.run.id }} | Delivery Note Automations{% endblock %}
+
+{% block content %}
+  <section class="hero compact">
+    <p class="eyebrow">Tracker run</p>
+    <h1>{{ summary.run.original_filename }}</h1>
+    <p class="intro">
+      This run captured {{ summary.run.rows_detected }} delivery rows. Review mismatches if any remain,
+      then download the final `.xls` file.
+    </p>
+    <div class="info-strip">
+      <div><span class="label">Status</span><strong>{{ summary.run.status.replace('_', ' ') }}</strong></div>
+      <div><span class="label">Invoice date</span><strong>{{ summary.run.invoice_date }}</strong></div>
+      <div><span class="label">Ready rows</span><strong>{{ summary.ready_lines }}</strong></div>
+      <div><span class="label">Needs review</span><strong>{{ summary.run.rows_needing_review }}</strong></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="actions">
+      {% if summary.run.rows_needing_review > 0 %}
+        <a class="primary-button" href="{{ url_for('review_run', run_id=summary.run.id) }}">Review unresolved SKUs</a>
+      {% else %}
+        <a class="primary-button" href="{{ url_for('download_run', run_id=summary.run.id) }}">Download final `.xls` file</a>
+      {% endif %}
+      <a class="secondary-button" href="{{ url_for('index') }}">Back to dashboard</a>
+    </div>
+
+    {% if summary.unresolved_groups %}
+      <h2>Unresolved SKUs</h2>
+      <div class="simple-table wide">
+        <div class="table-head"><span>Source SKU</span><span>Occurrences</span><span>Orders</span></div>
+        {% for group in summary.unresolved_groups %}
+          <div class="table-row">
+            <span>{{ group.source_sku }}</span>
+            <span>{{ group.occurrences }}</span>
+            <span>{{ group.order_numbers|join(', ') }}</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">Everything is matched. This run is ready for export.</p>
+    {% endif %}
+  </section>
+{% endblock %}

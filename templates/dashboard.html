@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard | Delivery Note Automations{% endblock %}
+
+{% block content %}
+  <section class="hero">
+    <p class="eyebrow">Source of truth + correction memory</p>
+    <h1>Upload your UOM master, then turn tracker files into a clean delivery-note export.</h1>
+    <p class="intro">
+      This system keeps a product master in the database, remembers approved SKU corrections,
+      checks new tracker uploads, and only exports when every line is safe.
+    </p>
+    <div class="info-strip">
+      <div><span class="label">Products</span><strong>{{ summary.product_count }}</strong></div>
+      <div><span class="label">Saved corrections</span><strong>{{ summary.alias_count }}</strong></div>
+      <div><span class="label">UOM imports</span><strong>{{ summary.import_count }}</strong></div>
+      <div><span class="label">Tracker runs</span><strong>{{ summary.run_count }}</strong></div>
+    </div>
+  </section>
+
+  <section class="grid-two">
+    <section class="panel">
+      <p class="eyebrow dark">Step 1</p>
+      <h2>Refresh the UOM master</h2>
+      <p class="panel-copy">
+        Upload the latest UOM workbook. This becomes the current source of truth for prices, VAT, and SKU details.
+      </p>
+      <form class="upload-form" action="{{ url_for('upload_uom') }}" method="post" enctype="multipart/form-data">
+        <label class="dropzone compact" for="uom_workbook">
+          <input id="uom_workbook" name="uom_workbook" type="file" accept=".xlsx" required>
+          <span class="drop-title">Choose updated UOM file</span>
+          <span class="drop-subtitle">Excel `.xlsx` workbook</span>
+        </label>
+        <button class="primary-button" type="submit">Import UOM master</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow dark">Step 2</p>
+      <h2>Upload the loading tracker</h2>
+      <p class="panel-copy">
+        The system reads all quantities above <strong>0.00</strong>, uses the UOM master, applies saved corrections,
+        then asks for help only when a new mismatch appears.
+      </p>
+      <form class="upload-form" action="{{ url_for('upload_tracker') }}" method="post" enctype="multipart/form-data">
+        <label class="dropzone compact" for="tracker_workbook">
+          <input id="tracker_workbook" name="tracker_workbook" type="file" accept=".xlsx" required>
+          <span class="drop-title">Choose tracker file</span>
+          <span class="drop-subtitle">One upload builds one delivery-note run</span>
+        </label>
+        <button class="primary-button" type="submit">Analyze tracker</button>
+      </form>
+    </section>
+  </section>
+
+  <section class="grid-two">
+    <section class="panel">
+      <h2>Recent UOM imports</h2>
+      {% if summary.recent_imports %}
+        <div class="simple-table">
+          <div class="table-head"><span>File</span><span>Rows</span><span>When</span></div>
+          {% for item in summary.recent_imports %}
+            <div class="table-row"><span>{{ item.filename }}</span><span>{{ item.product_count }}</span><span>{{ item.created_at.strftime('%Y-%m-%d %H:%M') }}</span></div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No UOM import has been saved yet.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel">
+      <h2>Recent tracker runs</h2>
+      {% if summary.recent_runs %}
+        <div class="simple-table">
+          <div class="table-head"><span>File</span><span>Status</span><span>Rows</span></div>
+          {% for run in summary.recent_runs %}
+            <a class="table-row link-row" href="{{ url_for('view_run', run_id=run.id) }}">
+              <span>{{ run.original_filename }}</span>
+              <span>{{ run.status.replace('_', ' ') }}</span>
+              <span>{{ run.rows_detected }}</span>
+            </a>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No tracker run has been created yet.</p>
+      {% endif %}
+    </section>
+  </section>
+
+  <section class="panel">
+    <h2>Current product master</h2>
+    {% if products %}
+      <div class="simple-table wide">
+        <div class="table-head"><span>SKU</span><span>Price</span><span>VAT</span></div>
+        {% for product in products %}
+          <div class="table-row"><span>{{ product.sku_name }}</span><span>{{ product.price if product.price is not none else 'Missing' }}</span><span>{{ 'Yes' if product.vatable else 'No' }}</span></div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">Import a UOM file to populate the product master.</p>
+    {% endif %}
+  </section>
+{% endblock %}

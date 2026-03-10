@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Review Run {{ summary.run.id }} | Delivery Note Automations{% endblock %}
+
+{% block content %}
+  <section class="hero compact">
+    <p class="eyebrow">Review step</p>
+    <h1>Match each unresolved SKU to the right product once.</h1>
+    <p class="intro">
+      When you approve a correction here, the system remembers it for future uploads.
+    </p>
+  </section>
+
+  <section class="panel">
+    <form class="correction-form" action="{{ url_for('submit_review', run_id=summary.run.id) }}" method="post">
+      {% for group in summary.unresolved_groups %}
+        <label class="field">
+          <span>{{ group.source_sku }}</span>
+          <small class="field-note">Seen {{ group.occurrences }} time(s) in {{ group.supermarkets|join(', ') }}</small>
+          <select name="resolution::{{ group.source_sku }}" required>
+            <option value="">Select the correct product</option>
+            {% for product in group.suggestions %}
+              <option value="{{ product.id }}">Suggested: {{ product.sku_name }}</option>
+            {% endfor %}
+            {% for product in all_products %}
+              <option value="{{ product.id }}">{{ product.sku_name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      {% endfor %}
+      <div class="actions">
+        <button class="primary-button" type="submit">Save corrections and continue</button>
+        <a class="secondary-button" href="{{ url_for('view_run', run_id=summary.run.id) }}">Back to run</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}
