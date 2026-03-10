@@ -53,6 +53,7 @@ def build_item_list_export() -> BytesIO:
         "Item Id\tItem Name \t Cases Size \t Tax Rate\t Item PTR\t Status\n"
         "1\tExisting SKU Alpha\t12\t7.5\t999\tActive\n"
         "2\tFresh SKU Beta\t24\t\t3450\tActive\n"
+        "3\tRetired SKU Gamma\t6\t\t1200\tInactive\n"
     )
     return BytesIO(payload.encode("utf-8"))
 
@@ -406,16 +407,83 @@ def test_item_list_export_can_merge_into_uom_without_replacing_existing() -> Non
         )
         html = response.get_data(as_text=True)
         assert response.status_code == 200
-        assert "1 new product rows were added and 1 existing items were skipped" in html
+        assert "1 new product rows were added and 1 existing items were skipped and 1 items were moved to inactive" in html
 
         with app.app_context():
             existing = db.session.query(Product).filter_by(sku_name="Existing SKU Alpha").one()
             fresh = db.session.query(Product).filter_by(sku_name="Fresh SKU Beta").one()
+            retired = db.session.query(Product).filter_by(sku_name="Retired SKU Gamma").one()
             assert float(existing.price) == 1200.0
             assert fresh.is_active is True
             assert float(fresh.price) == 3450.0
             assert fresh.uom == "ctn"
             assert fresh.alt_uom == "unt"
             assert fresh.vatable is False
+            assert retired.is_active is False
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_tracker_ignores_known_inactive_products() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        workbook = build_test_workbook()
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(workbook.getvalue()), "uom.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        response = client.post(
+            "/products",
+            data={
+                "sku_name": "Mamaologi SKU",
+                "price": "1",
+                "vatable": "no",
+                "uom": "ctn",
+                "alt_uom": "pcs",
+                "conversion": "10",
+            },
+        )
+        assert response.status_code == 302
+
+        with app.app_context():
+            product = db.session.query(Product).filter_by(sku_name="Mamaologi SKU").one()
+            product_id = product.id
+
+        response = client.post(f"/products/{product_id}/deactivate", follow_redirects=True)
+        assert response.status_code == 200
+
+        tracker = Workbook()
+        sheet = tracker.active
+        sheet.title = "Sheet1"
+        sheet.append(["Sales Order Number", "Stores", "Mamaologi SKU"])
+        sheet.append(["SO-200", "Market One", 3])
+        tracker_bytes = BytesIO()
+        tracker.save(tracker_bytes)
+        tracker_bytes.seek(0)
+
+        response = client.post(
+            "/runs/import",
+            data={"tracker_workbook": (BytesIO(tracker_bytes.getvalue()), "mamaologi.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "Everything active is matched and ready." in html
+        assert "Ignored" in html
+
+        with app.app_context():
             db.session.remove()
             db.engine.dispose()

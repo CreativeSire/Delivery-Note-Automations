@@ -86,6 +86,7 @@ class RunSummary:
     run: UploadRun
     unresolved_groups: list[UnresolvedGroup]
     ready_lines: int
+    ignored_lines: int
 
 
 def build_dashboard_summary() -> DashboardSummary:
@@ -150,6 +151,7 @@ def import_uom_rows(rows: list[list[Any]], filename: str, mode: str = "replace")
 
     imported = 0
     skipped = 0
+    deactivated = 0
     for row in rows:
         sku_name = _string_value(row[0])
         if not sku_name:
@@ -157,10 +159,17 @@ def import_uom_rows(rows: list[list[Any]], filename: str, mode: str = "replace")
 
         product = existing_products.get(sku_name)
         normalized_name = normalize_sku(sku_name)
+        is_active_row = True if len(row) < 7 else bool(row[6])
         if product is None and mode == "merge":
             normalized_matches = existing_by_normalized.get(normalized_name, [])
             if len(normalized_matches) == 1:
-                skipped += 1
+                matched_product = normalized_matches[0]
+                if is_active_row:
+                    skipped += 1
+                else:
+                    matched_product.is_active = False
+                    matched_product.source_import_id = import_log.id
+                    deactivated += 1
                 continue
 
         if product is None:
@@ -169,7 +178,12 @@ def import_uom_rows(rows: list[list[Any]], filename: str, mode: str = "replace")
             existing_products[sku_name] = product
             existing_by_normalized.setdefault(normalized_name, []).append(product)
         elif mode == "merge":
-            skipped += 1
+            if is_active_row:
+                skipped += 1
+                continue
+            product.is_active = False
+            product.source_import_id = import_log.id
+            deactivated += 1
             continue
 
         product.normalized_name = normalized_name
@@ -178,13 +192,17 @@ def import_uom_rows(rows: list[list[Any]], filename: str, mode: str = "replace")
         product.conversion = _decimal_value(row[3])
         product.vatable = _string_value(row[4]).lower() == "yes"
         product.price = _decimal_value(row[5])
-        product.is_active = True
+        product.is_active = is_active_row
         product.source_import_id = import_log.id
-        imported += 1
+        if is_active_row:
+            imported += 1
+        else:
+            deactivated += 1
 
     import_log.product_count = imported
     import_log.skipped_count = skipped
     import_log.import_mode = mode
+    import_log.deactivated_count = deactivated
     db.session.commit()
     return import_log
 
@@ -279,7 +297,7 @@ def create_tracker_run(file_storage: Any, timezone_name: str) -> UploadRun:
     db.session.add(run)
     db.session.flush()
 
-    products = list(db.session.scalars(select(Product).where(Product.is_active.is_(True))))
+    products = list(db.session.scalars(select(Product)))
     aliases = list(db.session.scalars(select(ProductAlias)))
 
     for row_index in range(2, sheet.max_row + 1):
@@ -304,7 +322,15 @@ def create_tracker_run(file_storage: Any, timezone_name: str) -> UploadRun:
             )
 
             match = resolve_product_match(sku_name, products, aliases)
-            if match is None or match.product.price is None:
+            if match is None:
+                line.status = "needs_review"
+                run.rows_needing_review += 1
+            elif not match.product.is_active:
+                line.status = "ignored"
+                line.matched_by = "inactive"
+                line.product_id = match.product.id
+                line.resolved_sku_name = match.product.sku_name
+            elif match.product.price is None:
                 line.status = "needs_review"
                 run.rows_needing_review += 1
             else:
@@ -350,7 +376,10 @@ def build_run_summary(run_id: str) -> RunSummary | None:
     ready_lines = db.session.scalar(
         select(func.count(UploadLine.id)).where(UploadLine.run_id == run_id, UploadLine.status == "ready")
     ) or 0
-    return RunSummary(run=run, unresolved_groups=groups, ready_lines=ready_lines)
+    ignored_lines = db.session.scalar(
+        select(func.count(UploadLine.id)).where(UploadLine.run_id == run_id, UploadLine.status == "ignored")
+    ) or 0
+    return RunSummary(run=run, unresolved_groups=groups, ready_lines=ready_lines, ignored_lines=ignored_lines)
 
 
 def apply_review_decisions(run_id: str, mapping: dict[str, int]) -> UploadRun:
@@ -406,7 +435,11 @@ def export_run_to_xls(run_id: str) -> tuple[str, bytes]:
         raise WorkbookShapeError("Resolve all review items before downloading the final file.")
 
     lines = list(
-        db.session.scalars(select(UploadLine).where(UploadLine.run_id == run_id).order_by(UploadLine.id.asc()))
+        db.session.scalars(
+            select(UploadLine)
+            .where(UploadLine.run_id == run_id, UploadLine.status == "ready")
+            .order_by(UploadLine.id.asc())
+        )
     )
     workbook = xlwt.Workbook()
     sheet = workbook.add_sheet(TEMPLATE_SHEET)
@@ -476,7 +509,7 @@ def resolve_product_match(source_sku: str, products: list[Product], aliases: lis
     alias = alias_lookup.get(source_sku)
     if alias is not None:
         product = db.session.get(Product, alias.product_id)
-        if product is not None and product.is_active:
+        if product is not None:
             return ProductMatch(product, "approved-alias")
 
     normalized = normalize_sku(source_sku)
@@ -487,7 +520,7 @@ def resolve_product_match(source_sku: str, products: list[Product], aliases: lis
     normalized_aliases = [alias for alias in aliases if alias.normalized_name == normalized]
     if len(normalized_aliases) == 1:
         product = db.session.get(Product, normalized_aliases[0].product_id)
-        if product is not None and product.is_active:
+        if product is not None:
             return ProductMatch(product, "approved-alias")
 
     return None
@@ -577,11 +610,10 @@ def _extract_item_list_rows(payload: bytes) -> list[list[Any]] | None:
             continue
 
         status = _string_value(cleaned.get("status")).lower()
-        if status and status != "active":
-            continue
+        is_active_row = status != "inactive" and status != "deactivated"
 
         price = _decimal_value(cleaned.get("item ptr"))
-        if price is None:
+        if price is None and is_active_row:
             continue
 
         tax_rate = _decimal_value(cleaned.get("tax rate"))
@@ -593,6 +625,7 @@ def _extract_item_list_rows(payload: bytes) -> list[list[Any]] | None:
                 _decimal_value(cleaned.get("cases size")),
                 "Yes" if tax_rate is not None and tax_rate > 0 else "No",
                 price,
+                is_active_row,
             ]
         )
 

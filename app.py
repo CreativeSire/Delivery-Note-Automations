@@ -155,9 +155,15 @@ def create_app(test_config: dict | None = None) -> Flask:
             return redirect(url_for("index"))
 
         skipped = getattr(import_log, "skipped_count", 0)
-        if skipped:
+        deactivated = getattr(import_log, "deactivated_count", 0)
+        if skipped or deactivated:
+            parts = [f"{import_log.product_count} new product rows were added"]
+            if skipped:
+                parts.append(f"{skipped} existing items were skipped")
+            if deactivated:
+                parts.append(f"{deactivated} items were moved to inactive")
             flash(
-                f"UOM update complete. {import_log.product_count} new product rows were added and {skipped} existing items were skipped.",
+                f"UOM update complete. {' and '.join(parts)}.",
                 "success",
             )
         else:

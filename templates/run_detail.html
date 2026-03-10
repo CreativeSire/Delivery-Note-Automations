@@ -13,6 +13,7 @@
       <div><span>Invoice date</span><strong>{{ summary.run.invoice_date }}</strong></div>
       <div><span>Ready</span><strong>{{ summary.ready_lines }}</strong></div>
       <div><span>Review</span><strong>{{ summary.run.rows_needing_review }}</strong></div>
+      <div><span>Ignored</span><strong>{{ summary.ignored_lines }}</strong></div>
     </div>
   </section>
 
@@ -50,7 +51,7 @@
         {% endfor %}
       </div>
     {% else %}
-      <p class="empty-state">Everything is matched and ready.</p>
+      <p class="empty-state">Everything active is matched and ready.{% if summary.ignored_lines %} {{ summary.ignored_lines }} line(s) were ignored because they belong to inactive products.{% endif %}</p>
     {% endif %}
   </section>
 {% endblock %}
