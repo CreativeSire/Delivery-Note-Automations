@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+
+{% block title %}Product Master | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="page-header">
+    <div>
+      <p class="eyebrow">Product master</p>
+      <h1>Manage the live UOM database</h1>
+      <p class="page-copy">
+        The imported UOM becomes the live product database here. You can add products, update rates or VAT, and remove
+        products from the active list without leaving the app.
+      </p>
+    </div>
+    <div class="header-note">
+      <span class="header-note-label">Live counts</span>
+      <strong>{{ summary.product_count }} active / {{ summary.inactive_product_count }} inactive</strong>
+    </div>
+  </section>
+
+  <section class="content-grid content-grid-wide">
+    <article class="panel form-panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">{% if product_to_edit %}Edit product{% else %}Add product{% endif %}</p>
+          <h2>{% if product_to_edit %}Update product details{% else %}Create a product entry{% endif %}</h2>
+        </div>
+      </div>
+
+      <form class="form-stack" action="{% if product_to_edit %}{{ url_for('update_product', product_id=product_to_edit.id) }}{% else %}{{ url_for('create_product') }}{% endif %}" method="post">
+        <label class="field">
+          <span class="field-label">Product name</span>
+          <input name="sku_name" type="text" value="{{ product_to_edit.sku_name if product_to_edit else '' }}" required>
+        </label>
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Rate / price</span>
+            <input name="price" type="number" step="0.01" min="0" value="{{ product_to_edit.price if product_to_edit and product_to_edit.price is not none else '' }}" required>
+          </label>
+          <label class="field">
+            <span class="field-label">VAT</span>
+            <select name="vatable" required>
+              <option value="yes" {% if product_to_edit and product_to_edit.vatable %}selected{% endif %}>Yes</option>
+              <option value="no" {% if not product_to_edit or not product_to_edit.vatable %}selected{% endif %}>No</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">UOM</span>
+            <input name="uom" type="text" value="{{ product_to_edit.uom if product_to_edit and product_to_edit.uom else '' }}">
+          </label>
+          <label class="field">
+            <span class="field-label">Alt UOM</span>
+            <input name="alt_uom" type="text" value="{{ product_to_edit.alt_uom if product_to_edit and product_to_edit.alt_uom else '' }}">
+          </label>
+        </div>
+
+        <label class="field">
+          <span class="field-label">Conversion</span>
+          <input name="conversion" type="number" step="0.01" min="0" value="{{ product_to_edit.conversion if product_to_edit and product_to_edit.conversion is not none else '' }}">
+        </label>
+
+        <div class="actions">
+          <button class="primary-button" type="submit">{% if product_to_edit %}Save changes{% else %}Add product{% endif %}</button>
+          {% if product_to_edit %}
+            <a class="secondary-button" href="{{ url_for('product_master') }}">Cancel edit</a>
+          {% endif %}
+        </div>
+      </form>
+    </article>
+
+    <article class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Active database</p>
+          <h2>Live product list</h2>
+        </div>
+      </div>
+
+      {% if active_products %}
+        <div class="data-table scroll-table">
+          <div class="table-row table-head table-row-products">
+            <span>Product</span>
+            <span>Rate</span>
+            <span>VAT</span>
+            <span>UOM</span>
+            <span>Actions</span>
+          </div>
+          {% for product in active_products %}
+            <div class="table-row table-row-products">
+              <span>{{ product.sku_name }}</span>
+              <span>{{ product.price if product.price is not none else 'Missing' }}</span>
+              <span>{{ 'Yes' if product.vatable else 'No' }}</span>
+              <span>{{ product.uom or '-' }}</span>
+              <span class="row-actions">
+                <a class="text-button" href="{{ url_for('edit_product', product_id=product.id) }}">Edit</a>
+                <form action="{{ url_for('deactivate_product', product_id=product.id) }}" method="post">
+                  <button class="text-button danger" type="submit">Remove</button>
+                </form>
+              </span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">Import a UOM file or add a product manually to begin.</p>
+      {% endif %}
+    </article>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Inactive products</p>
+        <h2>Removed from the live list</h2>
+      </div>
+    </div>
+
+    {% if inactive_products %}
+      <div class="data-table">
+        <div class="table-row table-head table-row-restore">
+          <span>Product</span>
+          <span>Rate</span>
+          <span>Restore</span>
+        </div>
+        {% for product in inactive_products %}
+          <div class="table-row table-row-restore">
+            <span>{{ product.sku_name }}</span>
+            <span>{{ product.price if product.price is not none else 'Missing' }}</span>
+            <span>
+              <form action="{{ url_for('activate_product', product_id=product.id) }}" method="post">
+                <button class="text-button" type="submit">Restore</button>
+              </form>
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">No inactive products at the moment.</p>
+    {% endif %}
+  </section>
+{% endblock %}

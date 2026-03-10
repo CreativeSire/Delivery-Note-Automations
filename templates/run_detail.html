@@ -1,48 +1,26 @@
 {% extends "base.html" %}
 
-{% block title %}Run {{ summary.run.id }} | Delivery Note Automations{% endblock %}
+{% block title %}Run {{ summary.run.id }} | DALA OPERATIONS{% endblock %}
 
 {% block content %}
-  <section class="hero-panel split-hero">
-    <div class="hero-copy">
-      <p class="section-kicker">Tracker run</p>
+  <section class="page-header">
+    <div>
+      <p class="eyebrow">Tracker run</p>
       <h1>{{ summary.run.original_filename }}</h1>
-      <p class="intro">
-        This run captured {{ summary.run.rows_detected }} delivery rows. If anything still needs help, review it once
-        and the app will remember the fix next time.
+      <p class="page-copy">
+        This run captured {{ summary.run.rows_detected }} delivery rows. Review any unmatched product name, then
+        download the final export file.
       </p>
     </div>
-
-    <aside class="hero-aside">
-      <div class="stat-grid">
-        <article class="stat-card">
-          <span class="stat-label">Status</span>
-          <strong>{{ summary.run.status.replace('_', ' ') }}</strong>
-        </article>
-        <article class="stat-card">
-          <span class="stat-label">Invoice date</span>
-          <strong>{{ summary.run.invoice_date }}</strong>
-        </article>
-        <article class="stat-card">
-          <span class="stat-label">Ready rows</span>
-          <strong>{{ summary.ready_lines }}</strong>
-        </article>
-        <article class="stat-card">
-          <span class="stat-label">Needs review</span>
-          <strong>{{ summary.run.rows_needing_review }}</strong>
-        </article>
-      </div>
-    </aside>
+    <div class="header-stats">
+      <div><span>Status</span><strong>{{ summary.run.status.replace('_', ' ') }}</strong></div>
+      <div><span>Invoice date</span><strong>{{ summary.run.invoice_date }}</strong></div>
+      <div><span>Ready rows</span><strong>{{ summary.ready_lines }}</strong></div>
+      <div><span>Needs review</span><strong>{{ summary.run.rows_needing_review }}</strong></div>
+    </div>
   </section>
 
-  <section class="panel panel-highlight">
-    <div class="panel-head">
-      <div>
-        <p class="section-kicker">Next action</p>
-        <h2>Move this run forward</h2>
-      </div>
-    </div>
-
+  <section class="panel">
     <div class="actions">
       {% if summary.run.rows_needing_review > 0 %}
         <a class="primary-button" href="{{ url_for('review_run', run_id=summary.run.id) }}">Review unresolved SKUs</a>
@@ -56,17 +34,20 @@
   <section class="panel">
     <div class="panel-head">
       <div>
-        <p class="section-kicker">Run details</p>
+        <p class="eyebrow">Run details</p>
         <h2>Unresolved SKUs</h2>
       </div>
-      <span class="panel-chip">{{ summary.run.rows_needing_review }} left</span>
     </div>
 
     {% if summary.unresolved_groups %}
-      <div class="simple-table simple-table-scroll">
-        <div class="table-head table-head-wide"><span>Source SKU</span><span>Occurrences</span><span>Orders</span></div>
+      <div class="data-table">
+        <div class="table-row table-head table-row-run">
+          <span>Source SKU</span>
+          <span>Occurrences</span>
+          <span>Orders</span>
+        </div>
         {% for group in summary.unresolved_groups %}
-          <div class="table-row table-row-wide">
+          <div class="table-row table-row-run">
             <span>{{ group.source_sku }}</span>
             <span>{{ group.occurrences }}</span>
             <span>{{ group.order_numbers|join(', ') }}</span>

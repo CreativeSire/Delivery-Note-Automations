@@ -51,6 +51,7 @@ class WorkbookShapeError(ServiceError):
 @dataclass
 class DashboardSummary:
     product_count: int
+    inactive_product_count: int
     alias_count: int
     import_count: int
     run_count: int
@@ -82,7 +83,8 @@ class RunSummary:
 
 def build_dashboard_summary() -> DashboardSummary:
     return DashboardSummary(
-        product_count=db.session.scalar(select(func.count(Product.id))) or 0,
+        product_count=db.session.scalar(select(func.count(Product.id)).where(Product.is_active.is_(True))) or 0,
+        inactive_product_count=db.session.scalar(select(func.count(Product.id)).where(Product.is_active.is_(False))) or 0,
         alias_count=db.session.scalar(select(func.count(ProductAlias.id))) or 0,
         import_count=db.session.scalar(select(func.count(UomImport.id))) or 0,
         run_count=db.session.scalar(select(func.count(UploadRun.id))) or 0,
@@ -105,7 +107,8 @@ def import_uom_workbook(file_storage: Any) -> UomImport:
         product.sku_name: product for product in db.session.scalars(select(Product))
     }
     for product in existing_products.values():
-        product.is_active = False
+        if product.source_import_id is not None:
+            product.is_active = False
 
     imported = 0
     for row_index in range(2, sheet.max_row + 1):
@@ -132,6 +135,55 @@ def import_uom_workbook(file_storage: Any) -> UomImport:
     import_log.product_count = imported
     db.session.commit()
     return import_log
+
+
+def save_product_master_entry(form_data: dict[str, Any], product_id: int | None = None) -> Product:
+    sku_name = _string_value(form_data.get("sku_name"))
+    if not sku_name:
+        raise ServiceError("Product name is required.")
+
+    price = _decimal_value(form_data.get("price"))
+    if price is None:
+        raise ServiceError("Rate/price is required.")
+
+    product = db.session.get(Product, product_id) if product_id is not None else None
+
+    duplicate = db.session.scalar(select(Product).where(Product.sku_name == sku_name))
+    if duplicate is not None and (product is None or duplicate.id != product.id):
+        raise ServiceError(f"'{sku_name}' already exists in the product master.")
+
+    if product is None:
+        product = Product(
+            sku_name=sku_name,
+            normalized_name=normalize_sku(sku_name),
+            is_active=True,
+            source_import_id=None,
+        )
+        db.session.add(product)
+
+    product.sku_name = sku_name
+    product.normalized_name = normalize_sku(sku_name)
+    product.uom = _string_value(form_data.get("uom")) or None
+    product.alt_uom = _string_value(form_data.get("alt_uom")) or None
+    product.conversion = _decimal_value(form_data.get("conversion"))
+    product.price = price
+    product.vatable = _string_value(form_data.get("vatable")).lower() in {"yes", "true", "1", "on"}
+    product.is_active = True
+    if product.source_import_id is None:
+        product.source_import_id = None
+
+    db.session.commit()
+    return product
+
+
+def set_product_active(product_id: int, is_active: bool) -> Product:
+    product = db.session.get(Product, product_id)
+    if product is None:
+        raise ServiceError("That product could not be found.")
+
+    product.is_active = is_active
+    db.session.commit()
+    return product
 
 
 def create_tracker_run(file_storage: Any, timezone_name: str) -> UploadRun:

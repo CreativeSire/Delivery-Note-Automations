@@ -1,65 +1,44 @@
 {% extends "base.html" %}
 
-{% block title %}Review Run {{ summary.run.id }} | Delivery Note Automations{% endblock %}
+{% block title %}Review Run {{ summary.run.id }} | DALA OPERATIONS{% endblock %}
 
 {% block content %}
-  <section class="hero-panel split-hero">
-    <div class="hero-copy">
-      <p class="section-kicker">Review step</p>
-      <h1>Approve each new product name once, then let the app remember it.</h1>
-      <p class="intro">
-        Pick the right product for each unmatched SKU below. After you save, future uploads will use the same fix
-        automatically.
+  <section class="page-header">
+    <div>
+      <p class="eyebrow">Review corrections</p>
+      <h1>Approve each unmatched product once</h1>
+      <p class="page-copy">
+        Choose the correct product for each unmatched source SKU. Once you save it, the same correction will be reused
+        automatically next time.
       </p>
     </div>
-
-    <aside class="hero-aside">
-      <div class="stat-grid">
-        <article class="stat-card">
-          <span class="stat-label">Run ID</span>
-          <strong>{{ summary.run.id[:8] }}</strong>
-        </article>
-        <article class="stat-card">
-          <span class="stat-label">Needs review</span>
-          <strong>{{ summary.run.rows_needing_review }}</strong>
-        </article>
-        <article class="stat-card">
-          <span class="stat-label">Ready rows</span>
-          <strong>{{ summary.ready_lines }}</strong>
-        </article>
-        <article class="stat-card">
-          <span class="stat-label">Invoice date</span>
-          <strong>{{ summary.run.invoice_date }}</strong>
-        </article>
-      </div>
-    </aside>
+    <div class="header-note">
+      <span class="header-note-label">Pending review</span>
+      <strong>{{ summary.run.rows_needing_review }} line(s)</strong>
+    </div>
   </section>
 
-  <form class="review-stack" action="{{ url_for('submit_review', run_id=summary.run.id) }}" method="post">
+  <form class="form-stack" action="{{ url_for('submit_review', run_id=summary.run.id) }}" method="post">
     {% for group in summary.unresolved_groups %}
-      <section class="panel review-card">
+      <section class="panel">
         <div class="panel-head">
           <div>
-            <p class="section-kicker">Needs a saved match</p>
+            <p class="eyebrow">Unmatched SKU</p>
             <h2>{{ group.source_sku }}</h2>
           </div>
-          <span class="panel-chip">{{ group.occurrences }} line(s)</span>
+          <div class="header-note">
+            <span class="header-note-label">Occurrences</span>
+            <strong>{{ group.occurrences }}</strong>
+          </div>
         </div>
 
-        <div class="review-meta">
+        <div class="review-details">
           <p><strong>Stores:</strong> {{ group.supermarkets|join(', ') }}</p>
           <p><strong>Orders:</strong> {{ group.order_numbers|join(', ') }}</p>
         </div>
 
-        {% if group.suggestions %}
-          <div class="notice">
-            <strong>Closest saved options</strong>
-            <p>{{ group.suggestions[:3] | map(attribute='sku_name') | join(' | ') }}</p>
-          </div>
-        {% endif %}
-
         <label class="field">
-          <span>Choose the correct product name</span>
+          <span class="field-label">Choose the correct product</span>
           <select name="resolution::{{ group.source_sku }}" required>
             <option value="">Select the correct product</option>
             {% for product in group.suggestions %}
@@ -73,9 +52,9 @@
       </section>
     {% endfor %}
 
-    <section class="panel panel-highlight">
+    <section class="panel">
       <div class="actions">
-        <button class="primary-button" type="submit">Save corrections and continue</button>
+        <button class="primary-button" type="submit">Save corrections</button>
         <a class="secondary-button" href="{{ url_for('view_run', run_id=summary.run.id) }}">Back to run</a>
       </div>
     </section>
