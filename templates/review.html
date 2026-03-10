@@ -3,20 +3,63 @@
 {% block title %}Review Run {{ summary.run.id }} | Delivery Note Automations{% endblock %}
 
 {% block content %}
-  <section class="hero compact">
-    <p class="eyebrow">Review step</p>
-    <h1>Match each unresolved SKU to the right product once.</h1>
-    <p class="intro">
-      When you approve a correction here, the system remembers it for future uploads.
-    </p>
+  <section class="hero-panel split-hero">
+    <div class="hero-copy">
+      <p class="section-kicker">Review step</p>
+      <h1>Approve each new product name once, then let the app remember it.</h1>
+      <p class="intro">
+        Pick the right product for each unmatched SKU below. After you save, future uploads will use the same fix
+        automatically.
+      </p>
+    </div>
+
+    <aside class="hero-aside">
+      <div class="stat-grid">
+        <article class="stat-card">
+          <span class="stat-label">Run ID</span>
+          <strong>{{ summary.run.id[:8] }}</strong>
+        </article>
+        <article class="stat-card">
+          <span class="stat-label">Needs review</span>
+          <strong>{{ summary.run.rows_needing_review }}</strong>
+        </article>
+        <article class="stat-card">
+          <span class="stat-label">Ready rows</span>
+          <strong>{{ summary.ready_lines }}</strong>
+        </article>
+        <article class="stat-card">
+          <span class="stat-label">Invoice date</span>
+          <strong>{{ summary.run.invoice_date }}</strong>
+        </article>
+      </div>
+    </aside>
   </section>
 
-  <section class="panel">
-    <form class="correction-form" action="{{ url_for('submit_review', run_id=summary.run.id) }}" method="post">
-      {% for group in summary.unresolved_groups %}
+  <form class="review-stack" action="{{ url_for('submit_review', run_id=summary.run.id) }}" method="post">
+    {% for group in summary.unresolved_groups %}
+      <section class="panel review-card">
+        <div class="panel-head">
+          <div>
+            <p class="section-kicker">Needs a saved match</p>
+            <h2>{{ group.source_sku }}</h2>
+          </div>
+          <span class="panel-chip">{{ group.occurrences }} line(s)</span>
+        </div>
+
+        <div class="review-meta">
+          <p><strong>Stores:</strong> {{ group.supermarkets|join(', ') }}</p>
+          <p><strong>Orders:</strong> {{ group.order_numbers|join(', ') }}</p>
+        </div>
+
+        {% if group.suggestions %}
+          <div class="notice">
+            <strong>Closest saved options</strong>
+            <p>{{ group.suggestions[:3] | map(attribute='sku_name') | join(' | ') }}</p>
+          </div>
+        {% endif %}
+
         <label class="field">
-          <span>{{ group.source_sku }}</span>
-          <small class="field-note">Seen {{ group.occurrences }} time(s) in {{ group.supermarkets|join(', ') }}</small>
+          <span>Choose the correct product name</span>
           <select name="resolution::{{ group.source_sku }}" required>
             <option value="">Select the correct product</option>
             {% for product in group.suggestions %}
@@ -27,11 +70,14 @@
             {% endfor %}
           </select>
         </label>
-      {% endfor %}
+      </section>
+    {% endfor %}
+
+    <section class="panel panel-highlight">
       <div class="actions">
         <button class="primary-button" type="submit">Save corrections and continue</button>
         <a class="secondary-button" href="{{ url_for('view_run', run_id=summary.run.id) }}">Back to run</a>
       </div>
-    </form>
-  </section>
+    </section>
+  </form>
 {% endblock %}

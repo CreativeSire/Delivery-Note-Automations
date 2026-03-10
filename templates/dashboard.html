@@ -3,80 +3,169 @@
 {% block title %}Dashboard | Delivery Note Automations{% endblock %}
 
 {% block content %}
-  <section class="hero">
-    <p class="eyebrow">Source of truth + correction memory</p>
-    <h1>Upload your UOM master, then turn tracker files into a clean delivery-note export.</h1>
-    <p class="intro">
-      This system keeps a product master in the database, remembers approved SKU corrections,
-      checks new tracker uploads, and only exports when every line is safe.
-    </p>
-    <div class="info-strip">
-      <div><span class="label">Products</span><strong>{{ summary.product_count }}</strong></div>
-      <div><span class="label">Saved corrections</span><strong>{{ summary.alias_count }}</strong></div>
-      <div><span class="label">UOM imports</span><strong>{{ summary.import_count }}</strong></div>
-      <div><span class="label">Tracker runs</span><strong>{{ summary.run_count }}</strong></div>
+  <section class="hero-panel dashboard-hero">
+    <div class="hero-copy">
+      <p class="section-kicker">Operations dashboard</p>
+      <h1>Turn loading trackers into clean delivery-note files your team can upload straight away.</h1>
+      <p class="intro">
+        Load the latest UOM source of truth once, upload a tracker, fix only the few names the system has never
+        seen before, then download one clean <strong>.xls</strong> file.
+      </p>
+
+      <div class="hero-flow">
+        <div class="flow-step">
+          <span class="flow-number">01</span>
+          <div>
+            <strong>Refresh the master</strong>
+            <p>Bring in the latest UOM file with prices and VAT.</p>
+          </div>
+        </div>
+        <div class="flow-step">
+          <span class="flow-number">02</span>
+          <div>
+            <strong>Drop the tracker</strong>
+            <p>Every row above 0.00 is turned into a delivery line.</p>
+          </div>
+        </div>
+        <div class="flow-step">
+          <span class="flow-number">03</span>
+          <div>
+            <strong>Review only what is new</strong>
+            <p>Saved name fixes are remembered for future runs.</p>
+          </div>
+        </div>
+        <div class="flow-step">
+          <span class="flow-number">04</span>
+          <div>
+            <strong>Download the export</strong>
+            <p>One ready-to-upload delivery-note file comes out.</p>
+          </div>
+        </div>
+      </div>
     </div>
+
+    <aside class="hero-aside">
+      <div class="stat-grid">
+        <article class="stat-card">
+          <span class="stat-label">Active products</span>
+          <strong>{{ summary.product_count }}</strong>
+        </article>
+        <article class="stat-card">
+          <span class="stat-label">Saved corrections</span>
+          <strong>{{ summary.alias_count }}</strong>
+        </article>
+        <article class="stat-card">
+          <span class="stat-label">UOM imports</span>
+          <strong>{{ summary.import_count }}</strong>
+        </article>
+        <article class="stat-card">
+          <span class="stat-label">Tracker runs</span>
+          <strong>{{ summary.run_count }}</strong>
+        </article>
+      </div>
+
+      <section class="hero-note">
+        <p class="section-kicker muted">What the app remembers</p>
+        <ul class="plain-list">
+          <li>Approved SKU name corrections</li>
+          <li>Latest UOM prices and VAT status</li>
+          <li>Recent uploads and run history</li>
+          <li>Which lines still need attention before export</li>
+        </ul>
+      </section>
+    </aside>
   </section>
 
-  <section class="grid-two">
-    <section class="panel">
-      <p class="eyebrow dark">Step 1</p>
-      <h2>Refresh the UOM master</h2>
+  <section class="workspace-grid">
+    <article class="panel panel-highlight">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Step 1</p>
+          <h2>Refresh the UOM master</h2>
+        </div>
+        <span class="panel-chip">Source of truth</span>
+      </div>
       <p class="panel-copy">
-        Upload the latest UOM workbook. This becomes the current source of truth for prices, VAT, and SKU details.
+        Upload the newest UOM workbook. This becomes the live product list for prices, VAT, unit details, and safe
+        matching.
       </p>
+
       <form class="upload-form" action="{{ url_for('upload_uom') }}" method="post" enctype="multipart/form-data">
-        <label class="dropzone compact" for="uom_workbook">
+        <label class="dropzone" for="uom_workbook">
           <input id="uom_workbook" name="uom_workbook" type="file" accept=".xlsx" required>
+          <span class="drop-icon">UOM</span>
           <span class="drop-title">Choose updated UOM file</span>
-          <span class="drop-subtitle">Excel `.xlsx` workbook</span>
+          <span class="drop-subtitle">Excel workbook with product names, VAT, and prices</span>
         </label>
         <button class="primary-button" type="submit">Import UOM master</button>
       </form>
-    </section>
+    </article>
 
-    <section class="panel">
-      <p class="eyebrow dark">Step 2</p>
-      <h2>Upload the loading tracker</h2>
+    <article class="panel panel-soft">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Step 2</p>
+          <h2>Upload the loading tracker</h2>
+        </div>
+        <span class="panel-chip">Daily run</span>
+      </div>
       <p class="panel-copy">
-        The system reads all quantities above <strong>0.00</strong>, uses the UOM master, applies saved corrections,
-        then asks for help only when a new mismatch appears.
+        The app reads every quantity above <strong>0.00</strong>, fills rates from the UOM master, applies saved
+        name fixes, and only stops when a new mismatch needs approval.
       </p>
+
       <form class="upload-form" action="{{ url_for('upload_tracker') }}" method="post" enctype="multipart/form-data">
-        <label class="dropzone compact" for="tracker_workbook">
+        <label class="dropzone" for="tracker_workbook">
           <input id="tracker_workbook" name="tracker_workbook" type="file" accept=".xlsx" required>
+          <span class="drop-icon">RUN</span>
           <span class="drop-title">Choose tracker file</span>
-          <span class="drop-subtitle">One upload builds one delivery-note run</span>
+          <span class="drop-subtitle">One tracker upload creates one delivery-note run</span>
         </label>
         <button class="primary-button" type="submit">Analyze tracker</button>
       </form>
-    </section>
+    </article>
   </section>
 
-  <section class="grid-two">
-    <section class="panel">
-      <h2>Recent UOM imports</h2>
+  <section class="workspace-grid workspace-grid-secondary">
+    <article class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Recent activity</p>
+          <h2>Recent UOM imports</h2>
+        </div>
+      </div>
+
       {% if summary.recent_imports %}
         <div class="simple-table">
           <div class="table-head"><span>File</span><span>Rows</span><span>When</span></div>
           {% for item in summary.recent_imports %}
-            <div class="table-row"><span>{{ item.filename }}</span><span>{{ item.product_count }}</span><span>{{ item.created_at.strftime('%Y-%m-%d %H:%M') }}</span></div>
+            <div class="table-row">
+              <span>{{ item.filename }}</span>
+              <span>{{ item.product_count }}</span>
+              <span>{{ item.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+            </div>
           {% endfor %}
         </div>
       {% else %}
         <p class="empty-state">No UOM import has been saved yet.</p>
       {% endif %}
-    </section>
+    </article>
 
-    <section class="panel">
-      <h2>Recent tracker runs</h2>
+    <article class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Recent activity</p>
+          <h2>Recent tracker runs</h2>
+        </div>
+      </div>
+
       {% if summary.recent_runs %}
         <div class="simple-table">
           <div class="table-head"><span>File</span><span>Status</span><span>Rows</span></div>
           {% for run in summary.recent_runs %}
             <a class="table-row link-row" href="{{ url_for('view_run', run_id=run.id) }}">
               <span>{{ run.original_filename }}</span>
-              <span>{{ run.status.replace('_', ' ') }}</span>
+              <span class="status-text">{{ run.status.replace('_', ' ') }}</span>
               <span>{{ run.rows_detected }}</span>
             </a>
           {% endfor %}
@@ -84,16 +173,27 @@
       {% else %}
         <p class="empty-state">No tracker run has been created yet.</p>
       {% endif %}
-    </section>
+    </article>
   </section>
 
-  <section class="panel">
-    <h2>Current product master</h2>
+  <section class="panel panel-wide">
+    <div class="panel-head">
+      <div>
+        <p class="section-kicker">Source of truth</p>
+        <h2>Current product master</h2>
+      </div>
+      <span class="panel-chip">{{ products|length }} shown</span>
+    </div>
+
     {% if products %}
-      <div class="simple-table wide">
-        <div class="table-head"><span>SKU</span><span>Price</span><span>VAT</span></div>
+      <div class="simple-table simple-table-scroll">
+        <div class="table-head table-head-wide"><span>SKU</span><span>Rate</span><span>VAT</span></div>
         {% for product in products %}
-          <div class="table-row"><span>{{ product.sku_name }}</span><span>{{ product.price if product.price is not none else 'Missing' }}</span><span>{{ 'Yes' if product.vatable else 'No' }}</span></div>
+          <div class="table-row table-row-wide">
+            <span>{{ product.sku_name }}</span>
+            <span>{{ product.price if product.price is not none else 'Missing' }}</span>
+            <span>{{ 'Yes' if product.vatable else 'No' }}</span>
+          </div>
         {% endfor %}
       </div>
     {% else %}
