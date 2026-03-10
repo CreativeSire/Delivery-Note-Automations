@@ -342,6 +342,10 @@ h2 {
   grid-row: span 2;
 }
 
+.dashboard-grid-premium {
+  grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr);
+}
+
 .panel {
   padding: 20px;
   border-radius: 24px;
@@ -573,6 +577,369 @@ h2 {
 
 .bar-column small {
   color: var(--text-soft);
+}
+
+.tracker-premium-panel {
+  background:
+    radial-gradient(circle at top right, rgba(214, 146, 46, 0.12), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.86));
+}
+
+.tracker-stat-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 16px;
+}
+
+.tracker-stat-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(24, 50, 59, 0.045);
+}
+
+.tracker-stat-card strong {
+  font-size: 0.98rem;
+  line-height: 1.4;
+  color: var(--brand-dark);
+}
+
+.insight-panel {
+  background:
+    radial-gradient(circle at top right, rgba(214, 146, 46, 0.18), transparent 22%),
+    linear-gradient(160deg, rgba(20, 57, 63, 0.98), rgba(27, 86, 94, 0.94));
+  color: #f4f8f8;
+}
+
+.insight-panel h2,
+.insight-panel .eyebrow,
+.insight-panel .pulse-label,
+.insight-panel .metric-line span,
+.insight-panel .chart-copy span,
+.insight-panel .chart-copy strong,
+.insight-panel .empty-state,
+.insight-panel .bar-column small,
+.insight-panel .metric-label,
+.insight-panel .panel-head .eyebrow {
+  color: inherit;
+}
+
+.insight-panel .eyebrow,
+.insight-panel .pulse-label,
+.insight-panel .metric-label {
+  color: rgba(244, 248, 248, 0.7);
+}
+
+.chart-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff2d9;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.premium-donut-layout {
+  align-items: stretch;
+}
+
+.premium-donut {
+  background:
+    conic-gradient(#f2b24d calc(var(--pct) * 1%), rgba(255, 255, 255, 0.12) 0),
+    radial-gradient(circle at center, rgba(255, 255, 255, 0.08), transparent 64%);
+  box-shadow: inset 0 0 30px rgba(255, 255, 255, 0.08);
+}
+
+.premium-donut::after {
+  background: rgba(20, 57, 63, 0.96);
+}
+
+.premium-donut .donut-core strong {
+  color: #ffffff;
+}
+
+.premium-donut .donut-core span {
+  color: rgba(244, 248, 248, 0.76);
+}
+
+.premium-chart-copy {
+  gap: 10px;
+}
+
+.premium-metric-line {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.premium-metric-line strong {
+  color: #ffffff;
+}
+
+.health-rails {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.health-rail {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr) 120px;
+  gap: 12px;
+  align-items: center;
+  color: rgba(244, 248, 248, 0.88);
+}
+
+.health-rail-track {
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.health-rail-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #f2b24d, #f6d28d);
+}
+
+.health-rail-track.muted {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.health-rail-fill.muted {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0.16));
+}
+
+.premium-pulse-block {
+  padding: 14px 0 0;
+}
+
+.pulse-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.pulse-row-head strong {
+  color: #ffffff;
+  font-size: 1rem;
+}
+
+.premium-bar-chart {
+  min-height: 168px;
+  padding: 14px 10px 12px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.premium-bar-chart .bar-fill {
+  max-width: 42px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
+}
+
+.sparkline-caption-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(54px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.sparkline-caption-row span {
+  color: rgba(244, 248, 248, 0.66);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.recent-runs-panel {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.93), rgba(255, 255, 255, 0.86));
+}
+
+.premium-run-table {
+  gap: 0;
+}
+
+.table-line-dashboard {
+  grid-template-columns: minmax(0, 2.2fr) 120px 80px 80px 90px 70px;
+}
+
+.premium-run-row {
+  border-bottom: 1px solid rgba(20, 51, 59, 0.06);
+}
+
+.dashboard-run-name {
+  display: grid;
+  gap: 4px;
+}
+
+.dashboard-run-name strong {
+  color: var(--brand-dark);
+}
+
+.dashboard-run-name small {
+  color: var(--text-soft);
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.status-ready,
+.status-exported {
+  background: rgba(31, 114, 89, 0.12);
+  color: var(--success);
+}
+
+.status-needs_review {
+  background: rgba(214, 146, 46, 0.16);
+  color: #8a5a10;
+}
+
+.status-neutral {
+  background: rgba(24, 50, 59, 0.08);
+  color: var(--brand-dark);
+}
+
+.database-summary-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 18px;
+}
+
+.database-summary-card {
+  display: grid;
+  gap: 8px;
+  min-height: 126px;
+}
+
+.database-summary-card strong {
+  font-size: 1.45rem;
+  color: var(--brand-dark);
+}
+
+.database-layout {
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+
+.database-table-panel,
+.database-form-panel {
+  min-height: 100%;
+}
+
+.database-form-panel {
+  position: sticky;
+  top: 18px;
+}
+
+.database-form-copy {
+  margin-bottom: 16px;
+}
+
+.database-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.database-toolbar-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(24, 50, 59, 0.05);
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.database-table {
+  gap: 0;
+}
+
+.table-line-admin {
+  grid-template-columns: minmax(0, 2.4fr) 90px 110px 100px 150px 110px 140px;
+}
+
+.admin-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-top: 14px;
+  padding-bottom: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(12px);
+}
+
+.admin-table-row {
+  border-bottom: 1px solid rgba(20, 51, 59, 0.06);
+}
+
+.admin-table-row:nth-child(odd) {
+  background: rgba(24, 50, 59, 0.018);
+}
+
+.product-main-cell {
+  display: grid;
+  gap: 4px;
+}
+
+.product-main-cell strong {
+  color: var(--brand-dark);
+}
+
+.product-main-cell small {
+  color: var(--text-soft);
+}
+
+.source-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.source-pill-imported {
+  background: rgba(31, 97, 108, 0.12);
+  color: var(--brand);
+}
+
+.source-pill-manual {
+  background: rgba(214, 146, 46, 0.14);
+  color: #8a5a10;
+}
+
+.admin-actions {
+  gap: 14px;
+}
+
+.inactive-products-panel {
+  margin-top: 18px;
 }
 
 .data-table {
@@ -837,6 +1204,7 @@ h2 {
 
   .dashboard-grid,
   .content-grid,
+  .database-summary-grid,
   .field-row,
   .header-stats,
   .sidebar-stats,
@@ -853,7 +1221,12 @@ h2 {
   .list-row,
   .table-line,
   .table-line-restore,
-  .table-line-run {
+  .table-line-run,
+  .table-line-admin,
+  .table-line-dashboard,
+  .health-rail,
+  .tracker-stat-grid,
+  .database-layout {
     grid-template-columns: 1fr;
   }
 
@@ -862,7 +1235,8 @@ h2 {
   }
 
   .review-card-head,
-  .review-actions-panel {
+  .review-actions-panel,
+  .pulse-row-head {
     flex-direction: column;
     align-items: flex-start;
   }

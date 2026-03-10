@@ -12,14 +12,29 @@
     <div class="header-chip">Live source ready</div>
   </section>
 
-  <section class="dashboard-grid">
-    <article class="panel tracker-panel">
+  <section class="dashboard-grid dashboard-grid-premium">
+    <article class="panel tracker-panel tracker-premium-panel">
       <div class="panel-head compact">
         <div>
           <p class="eyebrow">Tracker</p>
           <h2>Create a run</h2>
         </div>
         <span class="mini-chip">Tomorrow&apos;s invoice date</span>
+      </div>
+
+      <div class="tracker-stat-grid">
+        <div class="tracker-stat-card">
+          <span class="metric-label">Live source</span>
+          <strong>{{ summary.latest_import.filename if summary.latest_import else 'Not loaded' }}</strong>
+        </div>
+        <div class="tracker-stat-card">
+          <span class="metric-label">Saved corrections</span>
+          <strong>{{ summary.alias_count }}</strong>
+        </div>
+        <div class="tracker-stat-card">
+          <span class="metric-label">Runs recorded</span>
+          <strong>{{ summary.run_count }}</strong>
+        </div>
       </div>
 
       <form class="form-stack" action="{{ url_for('upload_tracker') }}" method="post" enctype="multipart/form-data">
@@ -36,51 +51,77 @@
       </form>
     </article>
 
-    <article class="panel chart-panel">
+    <article class="panel chart-panel insight-panel">
       <div class="panel-head compact">
         <div>
           <p class="eyebrow">Chart</p>
           <h2>Master health</h2>
         </div>
+        <span class="chart-badge">{{ chart.active_ratio }}% active</span>
       </div>
 
-      <div class="donut-layout">
-        <div class="donut-chart" style="--pct: {{ chart.active_ratio }};">
+      <div class="donut-layout premium-donut-layout">
+        <div class="donut-chart premium-donut" style="--pct: {{ chart.active_ratio }};">
           <div class="donut-core">
             <strong>{{ summary.product_count }}</strong>
             <span>active</span>
           </div>
         </div>
 
-        <div class="chart-copy">
-          <div class="metric-line">
+        <div class="chart-copy premium-chart-copy">
+          <div class="metric-line premium-metric-line">
+            <span>Active coverage</span>
+            <strong>{{ chart.active_ratio }}%</strong>
+          </div>
+          <div class="metric-line premium-metric-line">
             <span>Inactive products</span>
             <strong>{{ summary.inactive_product_count }}</strong>
           </div>
-          <div class="metric-line">
+          <div class="metric-line premium-metric-line">
             <span>Saved corrections</span>
             <strong>{{ summary.alias_count }}</strong>
           </div>
-          <div class="metric-line">
+          <div class="metric-line premium-metric-line">
             <span>Imports on record</span>
             <strong>{{ summary.import_count }}</strong>
           </div>
         </div>
       </div>
+
+      <div class="health-rails">
+        <div class="health-rail">
+          <span>Product coverage</span>
+          <div class="health-rail-track">
+            <span class="health-rail-fill" style="width: {{ chart.active_ratio }}%"></span>
+          </div>
+          <strong>{{ summary.product_count }} active</strong>
+        </div>
+        <div class="health-rail">
+          <span>Inactive share</span>
+          <div class="health-rail-track muted">
+            <span class="health-rail-fill muted" style="width: {{ (100 - chart.active_ratio) if chart.active_ratio <= 100 else 0 }}%"></span>
+          </div>
+          <strong>{{ summary.inactive_product_count }} inactive</strong>
+        </div>
+      </div>
     </article>
 
-    <article class="panel chart-panel">
+    <article class="panel chart-panel insight-panel">
       <div class="panel-head compact">
         <div>
           <p class="eyebrow">Chart</p>
           <h2>Operations pulse</h2>
         </div>
+        <span class="chart-badge">{{ summary.recent_runs|length }} recent runs</span>
       </div>
 
-      <div class="pulse-block">
-        <span class="pulse-label">Recent source imports</span>
+      <div class="pulse-block premium-pulse-block">
+        <div class="pulse-row-head">
+          <span class="pulse-label">Recent source imports</span>
+          <strong>{{ summary.import_count }}</strong>
+        </div>
         {% if summary.recent_imports %}
-          <div class="bar-chart">
+          <div class="bar-chart premium-bar-chart">
             {% for item in summary.recent_imports %}
               <div class="bar-column">
                 <span class="bar-fill import-bar" style="height: {{ ((item.product_count / chart.import_max) * 100)|round(0, 'ceil') if chart.import_max else 10 }}%"></span>
@@ -88,20 +129,33 @@
               </div>
             {% endfor %}
           </div>
+          <div class="sparkline-caption-row">
+            {% for item in summary.recent_imports %}
+              <span>{{ item.filename[:8] }}{% if item.filename|length > 8 %}…{% endif %}</span>
+            {% endfor %}
+          </div>
         {% else %}
           <p class="empty-state">No source import yet.</p>
         {% endif %}
       </div>
 
-      <div class="pulse-block">
-        <span class="pulse-label">Recent tracker rows</span>
+      <div class="pulse-block premium-pulse-block">
+        <div class="pulse-row-head">
+          <span class="pulse-label">Recent tracker rows</span>
+          <strong>{{ summary.run_count }}</strong>
+        </div>
         {% if summary.recent_runs %}
-          <div class="bar-chart">
+          <div class="bar-chart premium-bar-chart">
             {% for run in summary.recent_runs %}
               <div class="bar-column">
                 <span class="bar-fill run-bar" style="height: {{ ((run.rows_detected / chart.run_max) * 100)|round(0, 'ceil') if chart.run_max else 10 }}%"></span>
                 <small>{{ run.rows_detected }}</small>
               </div>
+            {% endfor %}
+          </div>
+          <div class="sparkline-caption-row">
+            {% for run in summary.recent_runs %}
+              <span>{{ run.status.replace('_', ' ') }}</span>
             {% endfor %}
           </div>
         {% else %}
@@ -111,7 +165,7 @@
     </article>
   </section>
 
-  <section class="panel">
+  <section class="panel recent-runs-panel">
     <div class="panel-head compact">
       <div>
         <p class="eyebrow">Recent runs</p>
@@ -119,15 +173,29 @@
       </div>
     </div>
     {% if summary.recent_runs %}
-      <div class="data-table list-table">
+      <div class="data-table premium-run-table">
+        <div class="table-line table-head-line table-line-dashboard">
+          <span>Run</span>
+          <span>Status</span>
+          <span>Rows</span>
+          <span>Ready</span>
+          <span>Review</span>
+          <span>Open</span>
+        </div>
         {% for run in summary.recent_runs %}
-          <a class="list-row" href="{{ url_for('view_run', run_id=run.id) }}">
-            <div>
+          <div class="table-line table-line-dashboard premium-run-row">
+            <span class="dashboard-run-name">
               <strong>{{ run.original_filename }}</strong>
-              <span>{{ run.status.replace('_', ' ') }}</span>
-            </div>
-            <span>{{ run.rows_detected }} rows</span>
-          </a>
+              <small>{{ run.invoice_date }}</small>
+            </span>
+            <span>
+              <span class="status-pill status-{{ run.status }}">{{ run.status.replace('_', ' ') }}</span>
+            </span>
+            <span>{{ run.rows_detected }}</span>
+            <span>{{ run.rows_ready }}</span>
+            <span>{{ run.rows_needing_review }}</span>
+            <span><a class="text-button" href="{{ url_for('view_run', run_id=run.id) }}">Open</a></span>
+          </div>
         {% endfor %}
       </div>
     {% else %}

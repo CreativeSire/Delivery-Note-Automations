@@ -11,14 +11,98 @@
     <div class="header-chip">{{ summary.product_count }} active products</div>
   </section>
 
-  <section class="content-grid content-grid-wide">
-    <article class="panel form-panel soft-panel">
+  <section class="database-summary-grid">
+    <article class="panel database-summary-card">
+      <span class="panel-label">Live catalog</span>
+      <strong>{{ active_products|length }}</strong>
+      <span class="review-subtle">active products</span>
+    </article>
+    <article class="panel database-summary-card">
+      <span class="panel-label">Manual entries</span>
+      <strong>{{ active_products|rejectattr('source_import_id')|list|length }}</strong>
+      <span class="review-subtle">added directly in app</span>
+    </article>
+    <article class="panel database-summary-card">
+      <span class="panel-label">UOM sourced</span>
+      <strong>{{ active_products|selectattr('source_import_id')|list|length }}</strong>
+      <span class="review-subtle">coming from live source file</span>
+    </article>
+    <article class="panel database-summary-card">
+      <span class="panel-label">VAT enabled</span>
+      <strong>{{ active_products|selectattr('vatable')|list|length }}</strong>
+      <span class="review-subtle">products with VAT</span>
+    </article>
+  </section>
+
+  <section class="content-grid content-grid-wide database-layout">
+    <article class="panel database-table-panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Live table</p>
+          <h2>Editable products</h2>
+        </div>
+        <span class="mini-chip">{{ summary.latest_import.filename if summary.latest_import else 'No live source' }}</span>
+      </div>
+
+      <div class="database-toolbar">
+        <span class="database-toolbar-pill">Active {{ active_products|length }}</span>
+        <span class="database-toolbar-pill">Inactive {{ inactive_products|length }}</span>
+        <span class="database-toolbar-pill">Corrections {{ summary.alias_count }}</span>
+      </div>
+
+      {% if active_products %}
+        <div class="data-table scroll-table database-table">
+          <div class="table-line table-head-line table-line-admin admin-table-head">
+            <span>Product</span>
+            <span>Source</span>
+            <span>Rate</span>
+            <span>VAT</span>
+            <span>Pack</span>
+            <span>Updated</span>
+            <span>Actions</span>
+          </div>
+          {% for product in active_products %}
+            <div class="table-line table-line-admin admin-table-row">
+              <span class="product-main-cell">
+                <strong>{{ product.sku_name }}</strong>
+                <small>{{ product.alt_uom or 'No alternate unit' }}</small>
+              </span>
+              <span>
+                <span class="source-pill {% if product.source_import_id %}source-pill-imported{% else %}source-pill-manual{% endif %}">
+                  {% if product.source_import_id %}UOM{% else %}Manual{% endif %}
+                </span>
+              </span>
+              <span>{{ '{:,.2f}'.format(product.price) if product.price is not none else 'Missing' }}</span>
+              <span>
+                <span class="status-pill {% if product.vatable %}status-ready{% else %}status-neutral{% endif %}">
+                  {% if product.vatable %}VAT{% else %}No VAT{% endif %}
+                </span>
+              </span>
+              <span>{{ product.uom or '-' }}{% if product.conversion %} · {{ product.conversion }}{% endif %}</span>
+              <span>{{ product.updated_at.strftime('%d %b %Y') }}</span>
+              <span class="row-actions admin-actions">
+                <a class="text-button" href="{{ url_for('edit_product', product_id=product.id) }}">Edit</a>
+                <form action="{{ url_for('deactivate_product', product_id=product.id) }}" method="post">
+                  <button class="text-button danger" type="submit">Remove</button>
+                </form>
+              </span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No active products yet.</p>
+      {% endif %}
+    </article>
+
+    <article class="panel form-panel soft-panel database-form-panel">
       <div class="panel-head compact">
         <div>
           <p class="eyebrow">{% if product_to_edit %}Edit{% else %}Add{% endif %}</p>
           <h2>{% if product_to_edit %}Update product{% else %}New product{% endif %}</h2>
         </div>
       </div>
+
+      <p class="page-copy database-form-copy">Use this side panel for one-off manual fixes, special products, or updates that should stay in the live database.</p>
 
       <form class="form-stack" action="{% if product_to_edit %}{{ url_for('update_product', product_id=product_to_edit.id) }}{% else %}{{ url_for('create_product') }}{% endif %}" method="post">
         <label class="field">
@@ -64,46 +148,9 @@
         </div>
       </form>
     </article>
-
-    <article class="panel">
-      <div class="panel-head compact">
-        <div>
-          <p class="eyebrow">Live table</p>
-          <h2>Editable products</h2>
-        </div>
-      </div>
-
-      {% if active_products %}
-        <div class="data-table scroll-table line-table">
-          <div class="table-line table-head-line">
-            <span>Product</span>
-            <span>Rate</span>
-            <span>VAT</span>
-            <span>UOM</span>
-            <span>Actions</span>
-          </div>
-          {% for product in active_products %}
-            <div class="table-line">
-              <span>{{ product.sku_name }}</span>
-              <span>{{ product.price if product.price is not none else 'Missing' }}</span>
-              <span>{{ 'Yes' if product.vatable else 'No' }}</span>
-              <span>{{ product.uom or '-' }}</span>
-              <span class="row-actions">
-                <a class="text-button" href="{{ url_for('edit_product', product_id=product.id) }}">Edit</a>
-                <form action="{{ url_for('deactivate_product', product_id=product.id) }}" method="post">
-                  <button class="text-button danger" type="submit">Remove</button>
-                </form>
-              </span>
-            </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <p class="empty-state">No active products yet.</p>
-      {% endif %}
-    </article>
   </section>
 
-  <section class="panel soft-panel">
+  <section class="panel soft-panel inactive-products-panel">
     <div class="panel-head compact">
       <div>
         <p class="eyebrow">Inactive</p>
@@ -113,15 +160,15 @@
 
     {% if inactive_products %}
       <div class="data-table line-table">
-        <div class="table-line table-head-line table-line-restore">
+        <div class="table-line table-head-line table-line-restore admin-table-head">
           <span>Product</span>
           <span>Rate</span>
           <span>Restore</span>
         </div>
         {% for product in inactive_products %}
-          <div class="table-line table-line-restore">
+          <div class="table-line table-line-restore admin-table-row">
             <span>{{ product.sku_name }}</span>
-            <span>{{ product.price if product.price is not none else 'Missing' }}</span>
+            <span>{{ '{:,.2f}'.format(product.price) if product.price is not none else 'Missing' }}</span>
             <span>
               <form action="{{ url_for('activate_product', product_id=product.id) }}" method="post">
                 <button class="text-button" type="submit">Restore</button>
