@@ -12,6 +12,7 @@ from services import (
     ServiceError,
     WorkbookShapeError,
     apply_review_decisions,
+    bootstrap_seed_uom_if_empty,
     build_dashboard_summary,
     build_run_summary,
     create_tracker_run,
@@ -40,6 +41,12 @@ def create_app(test_config: dict | None = None) -> Flask:
     db.init_app(app)
     with app.app_context():
         db.create_all()
+        if not app.config.get("TESTING"):
+            bootstrap_seed_uom_if_empty()
+
+    @app.context_processor
+    def inject_app_summary() -> dict[str, object]:
+        return {"app_summary": build_dashboard_summary()}
 
     @app.get("/")
     def index() -> str:

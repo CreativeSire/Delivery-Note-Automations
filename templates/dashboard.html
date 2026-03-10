@@ -3,81 +3,42 @@
 {% block title %}Dashboard | DALA OPERATIONS{% endblock %}
 
 {% block content %}
-  <section class="page-header">
+  <section class="page-header compact-header">
     <div>
       <p class="eyebrow">Dashboard</p>
-      <h1>Daily delivery note workflow</h1>
-      <p class="page-copy">
-        Upload the latest UOM file, run a loading tracker, review any new name mismatch, and download one clean
-        delivery-note file.
-      </p>
+      <h1>Delivery note runs</h1>
     </div>
-    <div class="header-note">
-      <span class="header-note-label">Today&apos;s flow</span>
-      <strong>UOM -> Tracker -> Review -> Export</strong>
-    </div>
+    <div class="header-chip">UOM -> Tracker -> Export</div>
   </section>
 
-  <section class="stats-grid">
-    <article class="stat-panel">
-      <span class="stat-label">Active products</span>
-      <strong>{{ summary.product_count }}</strong>
-      <p>Products currently available for matching and export.</p>
-    </article>
-    <article class="stat-panel">
-      <span class="stat-label">Inactive products</span>
-      <strong>{{ summary.inactive_product_count }}</strong>
-      <p>Products removed from the live master but still kept in history.</p>
-    </article>
-    <article class="stat-panel">
-      <span class="stat-label">Saved corrections</span>
-      <strong>{{ summary.alias_count }}</strong>
-      <p>Name fixes the app can now apply automatically.</p>
-    </article>
-    <article class="stat-panel">
-      <span class="stat-label">Tracker runs</span>
-      <strong>{{ summary.run_count }}</strong>
-      <p>Delivery-note runs created so far in this workspace.</p>
-    </article>
-  </section>
-
-  <section class="content-grid">
-    <article class="panel">
-      <div class="panel-head">
+  <section class="action-grid">
+    <article class="panel action-panel">
+      <div class="panel-head compact">
         <div>
-          <p class="eyebrow">Step 1</p>
-          <h2>Refresh the UOM master</h2>
+          <p class="eyebrow">UOM</p>
+          <h2>Update source file</h2>
         </div>
       </div>
-      <p class="panel-copy">
-        Import the latest UOM workbook. This updates the live product master used for prices, VAT, units, and matching.
-      </p>
       <form class="form-stack" action="{{ url_for('upload_uom') }}" method="post" enctype="multipart/form-data">
         <label class="file-field" for="uom_workbook">
-          <span class="field-label">UOM workbook</span>
+          <span class="field-label">Excel workbook</span>
           <input id="uom_workbook" name="uom_workbook" type="file" accept=".xlsx" required>
-          <span class="field-hint">Use the latest Excel `.xlsx` file from operations.</span>
         </label>
-        <button class="primary-button" type="submit">Import UOM file</button>
+        <button class="primary-button" type="submit">Import UOM</button>
       </form>
     </article>
 
-    <article class="panel">
-      <div class="panel-head">
+    <article class="panel action-panel">
+      <div class="panel-head compact">
         <div>
-          <p class="eyebrow">Step 2</p>
-          <h2>Run the loading tracker</h2>
+          <p class="eyebrow">Tracker</p>
+          <h2>Create run</h2>
         </div>
       </div>
-      <p class="panel-copy">
-        Upload a tracker workbook. The app will pick every quantity above <strong>0.00</strong>, use the product master,
-        and stop only when a new product name needs review.
-      </p>
       <form class="form-stack" action="{{ url_for('upload_tracker') }}" method="post" enctype="multipart/form-data">
         <label class="file-field" for="tracker_workbook">
-          <span class="field-label">Tracker workbook</span>
+          <span class="field-label">Excel workbook</span>
           <input id="tracker_workbook" name="tracker_workbook" type="file" accept=".xlsx" required>
-          <span class="field-hint">One upload creates one delivery-note run.</span>
         </label>
         <button class="primary-button" type="submit">Analyze tracker</button>
       </form>
@@ -86,57 +47,51 @@
 
   <section class="content-grid">
     <article class="panel">
-      <div class="panel-head">
-        <div>
-          <p class="eyebrow">Recent imports</p>
-          <h2>Latest UOM files</h2>
-        </div>
-        <a class="secondary-button" href="{{ url_for('product_master') }}">Open product master</a>
-      </div>
-      {% if summary.recent_imports %}
-        <div class="data-table">
-          <div class="table-row table-head">
-            <span>File</span>
-            <span>Rows</span>
-            <span>Imported at</span>
-          </div>
-          {% for item in summary.recent_imports %}
-            <div class="table-row">
-              <span>{{ item.filename }}</span>
-              <span>{{ item.product_count }}</span>
-              <span>{{ item.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
-            </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <p class="empty-state">No UOM import has been saved yet.</p>
-      {% endif %}
-    </article>
-
-    <article class="panel">
-      <div class="panel-head">
+      <div class="panel-head compact">
         <div>
           <p class="eyebrow">Recent runs</p>
           <h2>Tracker activity</h2>
         </div>
       </div>
       {% if summary.recent_runs %}
-        <div class="data-table">
-          <div class="table-row table-head">
-            <span>File</span>
-            <span>Status</span>
-            <span>Rows</span>
-          </div>
+        <div class="data-table list-table">
           {% for run in summary.recent_runs %}
-            <a class="table-row table-link" href="{{ url_for('view_run', run_id=run.id) }}">
-              <span>{{ run.original_filename }}</span>
-              <span>{{ run.status.replace('_', ' ') }}</span>
-              <span>{{ run.rows_detected }}</span>
+            <a class="list-row" href="{{ url_for('view_run', run_id=run.id) }}">
+              <div>
+                <strong>{{ run.original_filename }}</strong>
+                <span>{{ run.status.replace('_', ' ') }}</span>
+              </div>
+              <span>{{ run.rows_detected }} rows</span>
             </a>
           {% endfor %}
         </div>
       {% else %}
-        <p class="empty-state">No tracker run has been created yet.</p>
+        <p class="empty-state">No tracker run yet.</p>
+      {% endif %}
+    </article>
+
+    <article class="panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Source history</p>
+          <h2>Recent UOM imports</h2>
+        </div>
+        <a class="secondary-button" href="{{ url_for('product_master') }}">Open database</a>
+      </div>
+      {% if summary.recent_imports %}
+        <div class="data-table list-table">
+          {% for item in summary.recent_imports %}
+            <div class="list-row static-row">
+              <div>
+                <strong>{{ item.filename }}</strong>
+                <span>{{ item.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+              </div>
+              <span>{{ item.product_count }} rows</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No UOM import yet.</p>
       {% endif %}
     </article>
   </section>

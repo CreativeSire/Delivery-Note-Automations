@@ -7,34 +7,71 @@
     <title>{% block title %}DALA OPERATIONS{% endblock %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Merriweather:wght@700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Libre+Baskerville:wght@700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
   </head>
   <body>
-    <div class="app-frame">
-      <header class="topbar">
-        <div class="brand-block">
-          <a class="brand-title" href="{{ url_for('index') }}">DALA OPERATIONS</a>
-          <p class="brand-copy">Delivery note workspace for UOM, tracker checks, review, and export.</p>
+    <div class="workspace-shell">
+      <aside class="workspace-sidebar">
+        <div class="sidebar-brand">
+          <span class="sidebar-kicker">Operations</span>
+          <a class="sidebar-title" href="{{ url_for('index') }}">DALA OPERATIONS</a>
         </div>
 
-        <nav class="main-nav" aria-label="Main navigation">
+        <nav class="sidebar-nav" aria-label="Main navigation">
           <a class="nav-link {% if request.endpoint == 'index' %}is-active{% endif %}" href="{{ url_for('index') }}">Dashboard</a>
-          <a class="nav-link {% if request.endpoint in ['product_master', 'create_product', 'edit_product', 'update_product'] %}is-active{% endif %}" href="{{ url_for('product_master') }}">Product master</a>
+          <a class="nav-link {% if request.endpoint in ['product_master', 'create_product', 'edit_product', 'update_product'] %}is-active{% endif %}" href="{{ url_for('product_master') }}">Database</a>
         </nav>
-      </header>
 
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-          <section class="flash-stack">
-            {% for category, message in messages %}
-              <div class="flash flash-{{ category }}">{{ message }}</div>
-            {% endfor %}
-          </section>
-        {% endif %}
-      {% endwith %}
+        <section class="sidebar-panel">
+          <p class="panel-label">Live database</p>
+          {% if app_summary.latest_import %}
+            <strong class="sidebar-source">{{ app_summary.latest_import.filename }}</strong>
+            <span class="sidebar-meta">{{ app_summary.latest_import.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+          {% else %}
+            <strong class="sidebar-source">No UOM imported yet</strong>
+            <span class="sidebar-meta">Add a source file to begin.</span>
+          {% endif %}
+        </section>
 
-      {% block content %}{% endblock %}
+        <section class="sidebar-panel sidebar-stats">
+          <div>
+            <span class="metric-label">Active</span>
+            <strong>{{ app_summary.product_count }}</strong>
+          </div>
+          <div>
+            <span class="metric-label">Inactive</span>
+            <strong>{{ app_summary.inactive_product_count }}</strong>
+          </div>
+          <div>
+            <span class="metric-label">Corrections</span>
+            <strong>{{ app_summary.alias_count }}</strong>
+          </div>
+          <div>
+            <span class="metric-label">Runs</span>
+            <strong>{{ app_summary.run_count }}</strong>
+          </div>
+        </section>
+
+        <section class="sidebar-panel">
+          <p class="panel-label">Quick note</p>
+          <p class="sidebar-note">The latest UOM import is treated as the live source of truth for matching, rate, and VAT.</p>
+        </section>
+      </aside>
+
+      <main class="workspace-main">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <section class="flash-stack">
+              {% for category, message in messages %}
+                <div class="flash flash-{{ category }}">{{ message }}</div>
+              {% endfor %}
+            </section>
+          {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+      </main>
     </div>
   </body>
 </html>

@@ -3,33 +3,23 @@
 {% block title %}Review Run {{ summary.run.id }} | DALA OPERATIONS{% endblock %}
 
 {% block content %}
-  <section class="page-header">
+  <section class="page-header compact-header">
     <div>
-      <p class="eyebrow">Review corrections</p>
-      <h1>Approve each unmatched product once</h1>
-      <p class="page-copy">
-        Choose the correct product for each unmatched source SKU. Once you save it, the same correction will be reused
-        automatically next time.
-      </p>
+      <p class="eyebrow">Review</p>
+      <h1>Resolve new product names</h1>
     </div>
-    <div class="header-note">
-      <span class="header-note-label">Pending review</span>
-      <strong>{{ summary.run.rows_needing_review }} line(s)</strong>
-    </div>
+    <div class="header-chip">{{ summary.run.rows_needing_review }} pending</div>
   </section>
 
   <form class="form-stack" action="{{ url_for('submit_review', run_id=summary.run.id) }}" method="post">
     {% for group in summary.unresolved_groups %}
-      <section class="panel">
-        <div class="panel-head">
+      <section class="panel soft-panel">
+        <div class="panel-head compact">
           <div>
-            <p class="eyebrow">Unmatched SKU</p>
+            <p class="eyebrow">Source SKU</p>
             <h2>{{ group.source_sku }}</h2>
           </div>
-          <div class="header-note">
-            <span class="header-note-label">Occurrences</span>
-            <strong>{{ group.occurrences }}</strong>
-          </div>
+          <div class="header-chip">{{ group.occurrences }} line(s)</div>
         </div>
 
         <div class="review-details">
@@ -38,7 +28,7 @@
         </div>
 
         <label class="field">
-          <span class="field-label">Choose the correct product</span>
+          <span class="field-label">Correct product</span>
           <select name="resolution::{{ group.source_sku }}" required>
             <option value="">Select the correct product</option>
             {% for product in group.suggestions %}

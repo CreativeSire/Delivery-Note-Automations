@@ -8,6 +8,7 @@ from openpyxl import Workbook
 
 from app import _database_uri, create_app
 from models import Product, ProductAlias, UploadRun, db
+from services import bootstrap_seed_uom_if_empty
 
 
 def build_test_workbook() -> BytesIO:
@@ -95,7 +96,7 @@ def test_end_to_end_review_and_alias_memory() -> None:
         assert response.status_code == 200
         html = response.get_data(as_text=True)
         assert "rows are now ready for export" in html
-        assert "Download final `.xls` file" in html
+        assert "Download `.xls`" in html
 
         download = client.get(f"/runs/{run_id}/download")
         assert download.status_code == 200
@@ -295,5 +296,24 @@ def test_manual_product_stays_active_after_new_uom_import() -> None:
             assert alpha.is_active is True
             assert vanilla.is_active is False
             assert manual.is_active is True
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_seed_bootstrap_populates_database_when_empty() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        with app.app_context():
+            seeded = bootstrap_seed_uom_if_empty()
+            assert seeded is not None
+            assert seeded.product_count > 0
+            assert db.session.query(Product).count() == seeded.product_count
             db.session.remove()
             db.engine.dispose()

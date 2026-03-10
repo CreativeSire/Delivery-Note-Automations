@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from difflib import SequenceMatcher
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -38,6 +40,7 @@ VOUCHER_TYPE_NAME = "Delivery Invoice"
 SALES_LEDGER_NAME = "Inventory Pool"
 VAT_LABEL = "VAT"
 VAT_RATE = Decimal("7.5")
+SEED_UOM_PATH = Path(__file__).resolve().parent / "data" / "latest_uom_seed.csv"
 
 
 class ServiceError(Exception):
@@ -55,6 +58,7 @@ class DashboardSummary:
     alias_count: int
     import_count: int
     run_count: int
+    latest_import: UomImport | None
     recent_imports: list[UomImport]
     recent_runs: list[UploadRun]
 
@@ -82,12 +86,14 @@ class RunSummary:
 
 
 def build_dashboard_summary() -> DashboardSummary:
+    latest_import = db.session.scalar(select(UomImport).order_by(UomImport.created_at.desc()).limit(1))
     return DashboardSummary(
         product_count=db.session.scalar(select(func.count(Product.id)).where(Product.is_active.is_(True))) or 0,
         inactive_product_count=db.session.scalar(select(func.count(Product.id)).where(Product.is_active.is_(False))) or 0,
         alias_count=db.session.scalar(select(func.count(ProductAlias.id))) or 0,
         import_count=db.session.scalar(select(func.count(UomImport.id))) or 0,
         run_count=db.session.scalar(select(func.count(UploadRun.id))) or 0,
+        latest_import=latest_import,
         recent_imports=list(db.session.scalars(select(UomImport).order_by(UomImport.created_at.desc()).limit(5))),
         recent_runs=list(db.session.scalars(select(UploadRun).order_by(UploadRun.created_at.desc()).limit(8))),
     )
@@ -99,7 +105,22 @@ def import_uom_workbook(file_storage: Any) -> UomImport:
         raise WorkbookShapeError(f"The workbook must contain a '{UOM_SHEET}' sheet.")
 
     sheet = workbook[UOM_SHEET]
-    import_log = UomImport(filename=file_storage.filename or "uom.xlsx", product_count=0)
+    rows = [
+        [
+            sheet.cell(row_index, 1).value,
+            sheet.cell(row_index, 2).value,
+            sheet.cell(row_index, 3).value,
+            sheet.cell(row_index, 4).value,
+            sheet.cell(row_index, 5).value,
+            sheet.cell(row_index, 6).value,
+        ]
+        for row_index in range(2, sheet.max_row + 1)
+    ]
+    return import_uom_rows(rows, file_storage.filename or "uom.xlsx")
+
+
+def import_uom_rows(rows: list[list[Any]], filename: str) -> UomImport:
+    import_log = UomImport(filename=filename, product_count=0)
     db.session.add(import_log)
     db.session.flush()
 
@@ -111,8 +132,8 @@ def import_uom_workbook(file_storage: Any) -> UomImport:
             product.is_active = False
 
     imported = 0
-    for row_index in range(2, sheet.max_row + 1):
-        sku_name = _string_value(sheet.cell(row_index, 1).value)
+    for row in rows:
+        sku_name = _string_value(row[0])
         if not sku_name:
             continue
 
@@ -123,11 +144,11 @@ def import_uom_workbook(file_storage: Any) -> UomImport:
             existing_products[sku_name] = product
 
         product.normalized_name = normalize_sku(sku_name)
-        product.uom = _string_value(sheet.cell(row_index, 2).value) or None
-        product.alt_uom = _string_value(sheet.cell(row_index, 3).value) or None
-        product.conversion = _decimal_value(sheet.cell(row_index, 4).value)
-        product.vatable = _string_value(sheet.cell(row_index, 5).value).lower() == "yes"
-        product.price = _decimal_value(sheet.cell(row_index, 6).value)
+        product.uom = _string_value(row[1]) or None
+        product.alt_uom = _string_value(row[2]) or None
+        product.conversion = _decimal_value(row[3])
+        product.vatable = _string_value(row[4]).lower() == "yes"
+        product.price = _decimal_value(row[5])
         product.is_active = True
         product.source_import_id = import_log.id
         imported += 1
@@ -135,6 +156,26 @@ def import_uom_workbook(file_storage: Any) -> UomImport:
     import_log.product_count = imported
     db.session.commit()
     return import_log
+
+
+def bootstrap_seed_uom_if_empty() -> UomImport | None:
+    if not SEED_UOM_PATH.exists():
+        return None
+
+    if db.session.scalar(select(func.count(UomImport.id))) not in (None, 0):
+        return None
+
+    rows: list[list[Any]] = []
+    with SEED_UOM_PATH.open("r", encoding="utf-8", newline="") as seed_file:
+        reader = csv.reader(seed_file)
+        next(reader, None)
+        for row in reader:
+            rows.append(row[:6])
+
+    if not rows:
+        return None
+
+    return import_uom_rows(rows, "LT to DN system 1.xlsx (seed)")
 
 
 def save_product_master_entry(form_data: dict[str, Any], product_id: int | None = None) -> Product:
