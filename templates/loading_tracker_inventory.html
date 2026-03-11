@@ -1,69 +1,109 @@
 {% extends "base.html" %}
 
-{% block title %}Opening Inventory | DALA OPERATIONS{% endblock %}
+{% block title %}Live G2G | DALA OPERATIONS{% endblock %}
 
 {% block content %}
-  <section class="page-header compact-header">
+  <section class="hero-band">
     <div>
-      <p class="eyebrow">Loading Tracker</p>
-      <h1>Opening inventory and G2G</h1>
-      <p class="page-copy">This is the weekly starting position. It tells us what stock is okay to go out for loading before the day planning begins.</p>
+      <p class="eyebrow">Loading Tracker · G2G</p>
+      <h1>G2G is now a live operating view.</h1>
+      <p class="page-copy">Adjust opening or added stock here and let the remaining picture update from the current day plans automatically.</p>
     </div>
-    <div class="header-chip">Opening stock view</div>
+    <div class="hero-chip">Live inventory</div>
   </section>
 
   <nav class="tracker-day-nav" aria-label="Tracker helper navigation">
     <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_import_view', import_id=tracker_import.id) }}">Overview</a>
     <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_pending_view', import_id=tracker_import.id) }}">Pending</a>
-    <a class="tracker-day-link is-active" href="{{ url_for('loading_tracker_inventory_view', import_id=tracker_import.id) }}">Inventory</a>
+    <a class="tracker-day-link is-active" href="{{ url_for('loading_tracker_inventory_view', import_id=tracker_import.id) }}">G2G</a>
     <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_fees_view', import_id=tracker_import.id) }}">Fees</a>
   </nav>
 
-  <section class="operations-summary-grid">
-    <article class="panel summary-card">
-      <span class="panel-label">Opening G2G</span>
-      <strong>{{ '{:,.2f}'.format(tracker_import.opening_g2g_total or 0) }}</strong>
-      <span class="review-subtle">usable stock before loading</span>
+  <section class="stat-row">
+    <article class="glass-card stat-card">
+      <span class="panel-label">Opening + added</span>
+      <strong>{{ '{:,.2f}'.format(inventory_context.g2g_total) }}</strong>
+      <small>stock available to work with</small>
     </article>
-    <article class="panel summary-card">
-      <span class="panel-label">Opening remaining</span>
-      <strong>{{ '{:,.2f}'.format(tracker_import.opening_remaining_total or 0) }}</strong>
-      <span class="review-subtle">remaining after opening inventory rules</span>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Planned</span>
+      <strong>{{ '{:,.2f}'.format(inventory_context.planned_total) }}</strong>
+      <small>already consumed by the live week plan</small>
     </article>
-    <article class="panel summary-card">
-      <span class="panel-label">Assumption SKUs</span>
-      <strong>{{ tracker_import.assumptions_sku_count }}</strong>
-      <span class="review-subtle">product rows on the assumptions sheet</span>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Remaining</span>
+      <strong>{{ '{:,.2f}'.format(inventory_context.remaining_total) }}</strong>
+      <small>after the current plan</small>
     </article>
-    <article class="panel summary-card">
-      <span class="panel-label">Assumption stores</span>
-      <strong>{{ tracker_import.assumptions_store_count }}</strong>
-      <span class="review-subtle">stores listed on assumptions</span>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Tight SKUs</span>
+      <strong>{{ inventory_context.tight_count }}</strong>
+      <small>at zero or below</small>
     </article>
   </section>
 
-  <section class="panel">
-    <div class="panel-head compact">
-      <div>
-        <p class="eyebrow">Top G2G products</p>
-        <h2>Opening inventory pressure points</h2>
-      </div>
-    </div>
-    {% if tracker_import.opening_top_products_json %}
-      <div class="data-table line-table">
-        <div class="table-line table-head-line">
-          <span>SKU</span>
-          <span>Quantity</span>
+  <section class="content-split">
+    <article class="glass-card inventory-form-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Adjustment</p>
+          <h2>Update live stock</h2>
         </div>
-        {% for item in tracker_import.opening_top_products_json %}
-          <div class="table-line">
-            <span>{{ item.sku }}</span>
-            <span>{{ item.quantity }}</span>
-          </div>
-        {% endfor %}
       </div>
-    {% else %}
-      <p class="empty-state">No opening inventory totals were captured.</p>
-    {% endif %}
+      <form class="form-stack" action="{{ url_for('loading_tracker_inventory_update', import_id=tracker_import.id) }}" method="post">
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">SKU</span>
+            <input name="sku_name" type="text" placeholder="SKU name" required>
+          </label>
+          <label class="field">
+            <span class="field-label">Added quantity</span>
+            <input name="added_qty" type="number" step="0.01" placeholder="0.00">
+          </label>
+        </div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Opening G2G</span>
+            <input name="opening_g2g_qty" type="number" step="0.01" placeholder="0.00">
+          </label>
+          <label class="field">
+            <span class="field-label">Opening remaining</span>
+            <input name="opening_remaining_qty" type="number" step="0.01" placeholder="0.00">
+          </label>
+        </div>
+        <button class="primary-button" type="submit">Save inventory line</button>
+      </form>
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Live table</p>
+          <h2>Inventory by SKU</h2>
+        </div>
+      </div>
+      {% if inventory_context.rows %}
+        <div class="data-table">
+          <div class="table-line inventory-line table-head-line">
+            <span>SKU</span>
+            <span>Opening</span>
+            <span>Added</span>
+            <span>Planned</span>
+            <span>Remaining</span>
+          </div>
+          {% for row in inventory_context.rows %}
+            <div class="table-line inventory-line">
+              <span>{{ row.sku }}</span>
+              <span>{{ row.opening_g2g_qty }}</span>
+              <span>{{ row.added_qty }}</span>
+              <span>{{ row.planned_qty }}</span>
+              <span><span class="status-pill status-{{ row.status }}">{{ row.remaining_qty }}</span></span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No live G2G rows yet.</p>
+      {% endif %}
+    </article>
   </section>
 {% endblock %}

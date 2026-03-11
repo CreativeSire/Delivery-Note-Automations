@@ -9,12 +9,21 @@ from flask import Flask, abort, flash, redirect, render_template, request, send_
 
 from loading_tracker_services import (
     LoadingTrackerError,
+    PENDING_SENTINEL,
     build_loading_tracker_overview,
+    build_loading_tracker_day_context,
+    build_loading_tracker_fees_context,
+    build_loading_tracker_inventory_context,
+    build_loading_tracker_pending_context,
+    build_loading_tracker_row_editor,
     build_loading_tracker_summary,
     get_loading_tracker_day,
     get_loading_tracker_import,
-    group_store_rows_by_batch,
+    get_loading_tracker_row,
     import_loading_tracker_workbook,
+    move_loading_tracker_row,
+    save_inventory_adjustment,
+    save_loading_tracker_row,
 )
 from models import Product, db
 from services import (
@@ -73,6 +82,36 @@ def create_app(test_config: dict | None = None) -> Flask:
             loading_summary=loading_summary,
             tracker_overview=tracker_overview,
             latest_tracker_import=latest_tracker_import,
+        )
+
+    @app.get("/sku-automator")
+    def sku_automator_home() -> str:
+        return render_template(
+            "automation_future.html",
+            section_name="SKU Automator",
+            eyebrow="Future module",
+            headline="Feed cleaner SKU data straight into the product master and loading workflows.",
+            summary_points=[
+                "Receive new SKU lists before they reach planning.",
+                "Normalize naming before Delivery Note review is needed.",
+                "Push approved products into the live database automatically.",
+            ],
+            pipeline_steps=["SKU intake", "Validation", "Master update", "Planning sync"],
+        )
+
+    @app.get("/sales-order-automator")
+    def sales_order_automator_home() -> str:
+        return render_template(
+            "automation_future.html",
+            section_name="Sales Order Automator",
+            eyebrow="Future module",
+            headline="Turn incoming sales orders into day-ready planning lines for the Loading Tracker.",
+            summary_points=[
+                "Read order demand before manual planning starts.",
+                "Suggest which supermarkets belong on which day.",
+                "Send approved demand into Pending or straight into day planning.",
+            ],
+            pipeline_steps=["Order import", "Route logic", "Day suggestion", "Planner sync"],
         )
 
     @app.get("/delivery-note")
@@ -348,24 +387,101 @@ def create_app(test_config: dict | None = None) -> Flask:
         day = get_loading_tracker_day(import_id, day_name)
         if day is None:
             abort(404)
-        grouped_batches = group_store_rows_by_batch(day.store_rows_json or [])
         return render_template(
             "loading_tracker_day.html",
             tracker_import=tracker_import,
             day=day,
-            grouped_batches=grouped_batches,
+            day_context=build_loading_tracker_day_context(day),
         )
+
+    @app.get("/loading-tracker/imports/<import_id>/days/<day_name>/new")
+    def loading_tracker_day_new_row(import_id: str, day_name: str) -> str:
+        tracker_import = get_loading_tracker_import(import_id)
+        if tracker_import is None:
+            abort(404)
+        editor = build_loading_tracker_row_editor(tracker_import, selected_day_name=day_name)
+        return render_template(
+            "loading_tracker_row_form.html",
+            tracker_import=tracker_import,
+            editor=editor,
+            page_title=f"Add {day_name} planning row",
+            back_target=url_for("loading_tracker_day_view", import_id=import_id, day_name=day_name),
+        )
+
+    @app.post("/loading-tracker/imports/<import_id>/days/<day_name>/new")
+    def loading_tracker_day_create_row(import_id: str, day_name: str) -> str:
+        try:
+            row = save_loading_tracker_row(import_id, dict(request.form))
+        except LoadingTrackerError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("loading_tracker_day_new_row", import_id=import_id, day_name=day_name))
+
+        flash(f"'{row.store_name}' was added to the live planner.", "success")
+        if row.day is not None:
+            return redirect(url_for("loading_tracker_day_view", import_id=import_id, day_name=row.day.day_name))
+        return redirect(url_for("loading_tracker_pending_view", import_id=import_id))
+
+    @app.get("/loading-tracker/imports/<import_id>/rows/<int:row_id>/edit")
+    def loading_tracker_row_edit(import_id: str, row_id: int) -> str:
+        tracker_import = get_loading_tracker_import(import_id)
+        if tracker_import is None:
+            abort(404)
+        row = get_loading_tracker_row(row_id)
+        if row is None or row.tracker_import_id != import_id:
+            abort(404)
+        editor = build_loading_tracker_row_editor(tracker_import, row=row)
+        back_target = (
+            url_for("loading_tracker_day_view", import_id=import_id, day_name=row.day.day_name)
+            if row.day is not None
+            else url_for("loading_tracker_pending_view", import_id=import_id)
+        )
+        return render_template(
+            "loading_tracker_row_form.html",
+            tracker_import=tracker_import,
+            editor=editor,
+            page_title=f"Edit {row.store_name}",
+            back_target=back_target,
+        )
+
+    @app.post("/loading-tracker/imports/<import_id>/rows/<int:row_id>/edit")
+    def loading_tracker_row_update(import_id: str, row_id: int) -> str:
+        try:
+            row = save_loading_tracker_row(import_id, dict(request.form), row_id=row_id)
+        except LoadingTrackerError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("loading_tracker_row_edit", import_id=import_id, row_id=row_id))
+
+        flash(f"'{row.store_name}' was updated.", "success")
+        if row.day is not None:
+            return redirect(url_for("loading_tracker_day_view", import_id=import_id, day_name=row.day.day_name))
+        return redirect(url_for("loading_tracker_pending_view", import_id=import_id))
+
+    @app.post("/loading-tracker/imports/<import_id>/rows/<int:row_id>/move")
+    def loading_tracker_row_move(import_id: str, row_id: int) -> str:
+        target_day_name = request.form.get("target_day_name", "").strip() or PENDING_SENTINEL
+        reason_text = request.form.get("reason_text", "").strip() or None
+        try:
+            row = move_loading_tracker_row(import_id, row_id, target_day_name, reason_text)
+        except LoadingTrackerError as exc:
+            flash(str(exc), "error")
+            return redirect(request.referrer or url_for("loading_tracker_import_view", import_id=import_id))
+
+        if row.day is not None:
+            flash(f"'{row.store_name}' moved into {row.day.day_name}.", "success")
+            return redirect(url_for("loading_tracker_day_view", import_id=import_id, day_name=row.day.day_name))
+
+        flash(f"'{row.store_name}' is now waiting in Pending.", "warning")
+        return redirect(url_for("loading_tracker_pending_view", import_id=import_id))
 
     @app.get("/loading-tracker/imports/<import_id>/pending")
     def loading_tracker_pending_view(import_id: str) -> str:
         tracker_import = get_loading_tracker_import(import_id)
         if tracker_import is None:
             abort(404)
-        grouped_batches = group_store_rows_by_batch(tracker_import.pending_rows_json or [])
         return render_template(
             "loading_tracker_pending.html",
             tracker_import=tracker_import,
-            grouped_batches=grouped_batches,
+            pending_context=build_loading_tracker_pending_context(tracker_import),
         )
 
     @app.get("/loading-tracker/imports/<import_id>/inventory")
@@ -373,14 +489,33 @@ def create_app(test_config: dict | None = None) -> Flask:
         tracker_import = get_loading_tracker_import(import_id)
         if tracker_import is None:
             abort(404)
-        return render_template("loading_tracker_inventory.html", tracker_import=tracker_import)
+        return render_template(
+            "loading_tracker_inventory.html",
+            tracker_import=tracker_import,
+            inventory_context=build_loading_tracker_inventory_context(tracker_import),
+        )
+
+    @app.post("/loading-tracker/imports/<import_id>/inventory")
+    def loading_tracker_inventory_update(import_id: str) -> str:
+        try:
+            item = save_inventory_adjustment(import_id, dict(request.form))
+        except LoadingTrackerError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("loading_tracker_inventory_view", import_id=import_id))
+
+        flash(f"Inventory for '{item.sku_name}' was updated.", "success")
+        return redirect(url_for("loading_tracker_inventory_view", import_id=import_id))
 
     @app.get("/loading-tracker/imports/<import_id>/fees")
     def loading_tracker_fees_view(import_id: str) -> str:
         tracker_import = get_loading_tracker_import(import_id)
         if tracker_import is None:
             abort(404)
-        return render_template("loading_tracker_fees.html", tracker_import=tracker_import)
+        return render_template(
+            "loading_tracker_fees.html",
+            tracker_import=tracker_import,
+            fees_context=build_loading_tracker_fees_context(tracker_import),
+        )
 
     @app.get("/health")
     def health() -> dict[str, str]:

@@ -3,44 +3,43 @@
 {% block title %}Loading Tracker | DALA OPERATIONS{% endblock %}
 
 {% block content %}
-  <section class="page-header compact-header">
+  <section class="hero-band">
     <div>
       <p class="eyebrow">Loading Tracker</p>
-      <h1>Trip planning and warehouse loading</h1>
-      <p class="page-copy">Import the weekly tracker workbook, keep the planning days visible, and review G2G, pending loads, loading batches, and fee control without jumping across Excel tabs.</p>
+      <h1>Editable day planning, generated pending, live G2G, and LL built from the plan.</h1>
+      <p class="page-copy">Import the weekly workbook once, then keep working inside the app instead of treating the workbook as the only place the process can live.</p>
     </div>
-    <div class="header-chip">{% if tracker_import %}{{ overview.day_count }} day sheets loaded{% else %}Waiting for workbook{% endif %}</div>
+    <div class="hero-chip">{{ 'Live workflow' if tracker_import and overview.live_ready else 'Import workbook' }}</div>
   </section>
 
-  <section class="content-grid content-grid-wide">
-    <article class="panel tracker-panel">
-      <div class="panel-head compact">
+  <section class="content-split content-split-hero">
+    <article class="glass-card tracker-intake-card">
+      <div class="module-head compact">
         <div>
-          <p class="eyebrow">Import</p>
-          <h2>Weekly loading tracker</h2>
+          <p class="eyebrow">Weekly import</p>
+          <h2>Bring in the planning workbook</h2>
         </div>
-        <span class="mini-chip">Workbook intake</span>
       </div>
-
       <form class="form-stack" action="{{ url_for('upload_loading_tracker') }}" method="post" enctype="multipart/form-data">
-        <label class="file-field">
-          <span class="field-label">Loading tracker workbook</span>
+        <label class="file-field premium-file-field">
+          <span class="field-label">Workbook</span>
           <input name="loading_tracker_workbook" type="file" accept=".xlsx,.xls" required>
         </label>
         <div class="chip-row">
-          <span class="info-chip">Mon to Sat planning</span>
-          <span class="info-chip">LL day sheets</span>
-          <span class="info-chip">Pending and fee support</span>
+          <span class="info-chip">Day sheets</span>
+          <span class="info-chip">Pending</span>
+          <span class="info-chip">Opening inventory</span>
+          <span class="info-chip">BP New Fees</span>
         </div>
         <button class="primary-button" type="submit">Import weekly tracker</button>
       </form>
     </article>
 
-    <article class="panel">
-      <div class="panel-head compact">
+    <article class="glass-card">
+      <div class="module-head compact">
         <div>
-          <p class="eyebrow">Latest import</p>
-          <h2>{{ tracker_import.week_label if tracker_import else 'No workbook yet' }}</h2>
+          <p class="eyebrow">Live overview</p>
+          <h2>{{ tracker_import.week_label if tracker_import else 'No tracker imported yet' }}</h2>
         </div>
       </div>
       {% if tracker_import %}
@@ -50,98 +49,89 @@
             <strong>{{ tracker_import.filename }}</strong>
           </div>
           <div class="tracker-overview-row">
-            <span class="metric-label">Assumption SKUs</span>
-            <strong>{{ tracker_import.assumptions_sku_count }}</strong>
+            <span class="metric-label">Planning days</span>
+            <strong>{{ overview.day_count }}</strong>
           </div>
           <div class="tracker-overview-row">
-            <span class="metric-label">Stores in assumptions</span>
-            <strong>{{ tracker_import.assumptions_store_count }}</strong>
+            <span class="metric-label">Live pending rows</span>
+            <strong>{{ overview.total_pending_rows }}</strong>
           </div>
           <div class="tracker-overview-row">
-            <span class="metric-label">Opening G2G</span>
-            <strong>{{ '{:,.2f}'.format(tracker_import.opening_g2g_total or 0) }}</strong>
-          </div>
-          <div class="tracker-overview-row">
-            <span class="metric-label">Pending rows</span>
-            <strong>{{ tracker_import.pending_rows_json|length }}</strong>
-          </div>
-          <div class="tracker-overview-row">
-            <span class="metric-label">Fee lines</span>
-            <strong>{{ tracker_import.fees_row_count }}</strong>
+            <span class="metric-label">Largest day</span>
+            <strong>{{ overview.largest_day_name or 'None yet' }}</strong>
           </div>
         </div>
       {% else %}
-        <p class="empty-state">Import a workbook to activate the Loading Tracker module.</p>
+        <p class="empty-state">Import a workbook to open the live planning flow.</p>
       {% endif %}
     </article>
   </section>
 
   {% if tracker_import %}
-    <section class="operations-summary-grid tracker-home-stats">
-      <article class="panel summary-card">
-        <span class="panel-label">Planning days</span>
-        <strong>{{ overview.day_count }}</strong>
-        <span class="review-subtle">{{ overview.total_batches }} batches across the week</span>
+    <section class="stat-row">
+      <article class="glass-card stat-card">
+        <span class="panel-label">Open batches</span>
+        <strong>{{ overview.total_batches }}</strong>
+        <small>across all planning days</small>
       </article>
-      <article class="panel summary-card">
+      <article class="glass-card stat-card">
         <span class="panel-label">Planned stores</span>
         <strong>{{ overview.total_active_stores }}</strong>
-        <span class="review-subtle">active store rows across day sheets</span>
+        <small>currently active in live days</small>
       </article>
-      <article class="panel summary-card">
-        <span class="panel-label">Pending loads</span>
-        <strong>{{ tracker_import.pending_rows_json|length }}</strong>
-        <span class="review-subtle">still waiting to be planned</span>
+      <article class="glass-card stat-card">
+        <span class="panel-label">Pending rows</span>
+        <strong>{{ overview.total_pending_rows }}</strong>
+        <small>held until the right stock or day</small>
       </article>
-      <article class="panel summary-card">
-        <span class="panel-label">Largest day value</span>
-        <strong>{{ '{:,.0f}'.format(overview.largest_day.total_value or 0) if overview.largest_day else '0' }}</strong>
-        <span class="review-subtle">{% if overview.largest_day %}{{ overview.largest_day.day_name }} carries the heaviest load{% else %}No planning data yet{% endif %}</span>
+      <article class="glass-card stat-card">
+        <span class="panel-label">Imported assumptions</span>
+        <strong>{{ tracker_import.assumptions_sku_count }}</strong>
+        <small>{{ tracker_import.assumptions_store_count }} stores in assumptions</small>
       </article>
     </section>
 
-    <section class="content-grid content-grid-wide">
-      <article class="panel">
-        <div class="panel-head compact">
+    <section class="content-split">
+      <article class="glass-card">
+        <div class="module-head compact">
           <div>
             <p class="eyebrow">Daily planning</p>
-            <h2>Mon to Sat</h2>
+            <h2>Week view</h2>
           </div>
         </div>
-        <div class="day-card-grid">
+        <div class="day-canvas">
           {% for day in day_cards %}
-            <a class="day-card" href="{{ url_for('loading_tracker_day_view', import_id=tracker_import.id, day_name=day.day_name) }}">
-              <span class="day-card-name">{{ day.day_name }}</span>
-              <strong>{{ day.active_store_count }} stores</strong>
-              <span>G2G {{ '{:,.2f}'.format(day.g2g_total or 0) }}</span>
-              <span>Remaining {{ '{:,.2f}'.format(day.remaining_total or 0) }}</span>
+            <a class="day-stage" href="{{ url_for('loading_tracker_day_view', import_id=tracker_import.id, day_name=day.day_name) }}">
+              <span class="day-stage-name">{{ day.day_name }}</span>
+              <strong>{{ day.planning_rows|selectattr('row_state', 'equalto', 'planned')|list|length }} live rows</strong>
+              <small>Open and edit the day</small>
             </a>
           {% endfor %}
         </div>
       </article>
 
-      <article class="panel">
-        <div class="panel-head compact">
+      <article class="glass-card">
+        <div class="module-head compact">
           <div>
-            <p class="eyebrow">Support pages</p>
-            <h2>Planning helpers</h2>
+            <p class="eyebrow">Live workflow</p>
+            <h2>Generated helpers</h2>
           </div>
         </div>
-        <div class="support-card-grid">
-          <a class="support-card" href="{{ url_for('loading_tracker_pending_view', import_id=tracker_import.id) }}">
+        <div class="future-grid">
+          <a class="future-card" href="{{ url_for('loading_tracker_pending_view', import_id=tracker_import.id) }}">
             <span class="panel-label">Pending</span>
-            <strong>{{ tracker_import.pending_rows_json|length }}</strong>
-            <span class="review-subtle">Rows still waiting for the right day, route, or stock.</span>
+            <strong>{{ overview.total_pending_rows }} rows waiting</strong>
+            <small>Move them into a day when the plan is ready.</small>
           </a>
-          <a class="support-card" href="{{ url_for('loading_tracker_inventory_view', import_id=tracker_import.id) }}">
-            <span class="panel-label">Opening inventory</span>
-            <strong>{{ '{:,.2f}'.format(tracker_import.opening_g2g_total or 0) }}</strong>
-            <span class="review-subtle">Starting G2G position for the week.</span>
+          <a class="future-card" href="{{ url_for('loading_tracker_inventory_view', import_id=tracker_import.id) }}">
+            <span class="panel-label">G2G</span>
+            <strong>{{ '{:,.2f}'.format(tracker_import.opening_g2g_total or 0) }} opening</strong>
+            <small>Adjust live stock and let remaining quantities update automatically.</small>
           </a>
-          <a class="support-card" href="{{ url_for('loading_tracker_fees_view', import_id=tracker_import.id) }}">
+          <a class="future-card" href="{{ url_for('loading_tracker_fees_view', import_id=tracker_import.id) }}">
             <span class="panel-label">BP New Fees</span>
-            <strong>{{ tracker_import.fees_row_count }}</strong>
-            <span class="review-subtle">Rows used to watch load value and delivery cost limits.</span>
+            <strong>{{ tracker_import.fees_row_count }} fee rows</strong>
+            <small>Keep load value control visible beside planning.</small>
           </a>
         </div>
       </article>

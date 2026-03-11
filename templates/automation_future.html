@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}{{ section_name }} | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="hero-band">
+    <div>
+      <p class="eyebrow">{{ eyebrow }}</p>
+      <h1>{{ headline }}</h1>
+      <p class="page-copy">This module is wired into the platform structure now, so we can turn it on cleanly without reshaping the rest of the app later.</p>
+    </div>
+    <div class="hero-chip">Planned next</div>
+  </section>
+
+  <section class="content-split">
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">What it will do</p>
+          <h2>{{ section_name }}</h2>
+        </div>
+      </div>
+      <div class="future-points">
+        {% for point in summary_points %}
+          <div class="future-point">{{ point }}</div>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Pipeline</p>
+          <h2>How it plugs in</h2>
+        </div>
+      </div>
+      <div class="pipeline-strip">
+        {% for step in pipeline_steps %}
+          <div class="pipeline-step">
+            <span>{{ '%02d' % loop.index }}</span>
+            <strong>{{ step }}</strong>
+          </div>
+        {% endfor %}
+      </div>
+    </article>
+  </section>
+{% endblock %}

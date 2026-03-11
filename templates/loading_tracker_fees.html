@@ -3,73 +3,73 @@
 {% block title %}BP New Fees | DALA OPERATIONS{% endblock %}
 
 {% block content %}
-  <section class="page-header compact-header">
+  <section class="hero-band">
     <div>
-      <p class="eyebrow">Loading Tracker</p>
-      <h1>BP New Fees control</h1>
-      <p class="page-copy">This view keeps the operational fee sheet visible so the team can watch the value sitting inside each planned load before warehouse loading goes too far.</p>
+      <p class="eyebrow">Loading Tracker · Fees</p>
+      <h1>Keep load value control close to planning.</h1>
+      <p class="page-copy">This stays visible beside the live planner so the team can watch delivery value and collection value while batches are being shaped.</p>
     </div>
-    <div class="header-chip">{{ tracker_import.fees_row_count }} fee row{% if tracker_import.fees_row_count != 1 %}s{% endif %}</div>
+    <div class="hero-chip">{{ fees_context.row_count }} fee rows</div>
   </section>
 
   <nav class="tracker-day-nav" aria-label="Tracker helper navigation">
     <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_import_view', import_id=tracker_import.id) }}">Overview</a>
     <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_pending_view', import_id=tracker_import.id) }}">Pending</a>
-    <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_inventory_view', import_id=tracker_import.id) }}">Inventory</a>
+    <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_inventory_view', import_id=tracker_import.id) }}">G2G</a>
     <a class="tracker-day-link is-active" href="{{ url_for('loading_tracker_fees_view', import_id=tracker_import.id) }}">Fees</a>
   </nav>
 
-  <section class="operations-summary-grid">
-    <article class="panel summary-card">
+  <section class="stat-row">
+    <article class="glass-card stat-card">
       <span class="panel-label">Fee rows</span>
-      <strong>{{ tracker_import.fees_row_count }}</strong>
-      <span class="review-subtle">products with fee control data</span>
+      <strong>{{ fees_context.row_count }}</strong>
+      <small>imported control lines</small>
     </article>
-    <article class="panel summary-card">
-      <span class="panel-label">Retail delivery value</span>
-      <strong>{{ '{:,.0f}'.format(tracker_import.fees_total_delivery_value or 0) }}</strong>
-      <span class="review-subtle">total delivery value in the fee sheet</span>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Delivery value</span>
+      <strong>{{ '{:,.0f}'.format(fees_context.total_delivery_value) }}</strong>
+      <small>retail deliveries total</small>
     </article>
-    <article class="panel summary-card">
-      <span class="panel-label">Payment collection value</span>
-      <strong>{{ '{:,.0f}'.format(tracker_import.fees_total_payment_value or 0) }}</strong>
-      <span class="review-subtle">total collection value in the fee sheet</span>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Collection value</span>
+      <strong>{{ '{:,.0f}'.format(fees_context.total_payment_value) }}</strong>
+      <small>payment collection total</small>
     </article>
-    <article class="panel summary-card">
-      <span class="panel-label">Notes</span>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Note lines</span>
       <strong>{{ tracker_import.notes_count }}</strong>
-      <span class="review-subtle">note lines captured from the workbook</span>
+      <small>supporting note rows</small>
     </article>
   </section>
 
-  <section class="panel">
-    <div class="panel-head compact">
+  <section class="glass-card">
+    <div class="module-head compact">
       <div>
-        <p class="eyebrow">Top fee rows</p>
-        <h2>Highest delivery-value products</h2>
+        <p class="eyebrow">Fee table</p>
+        <h2>Highest delivery-value SKUs</h2>
       </div>
     </div>
-    {% if tracker_import.fee_rows_json %}
-      <div class="data-table line-table">
-        <div class="table-line table-head-line">
+    {% if fees_context.rows %}
+      <div class="data-table">
+        <div class="table-line fees-line table-head-line">
           <span>SKU</span>
           <span>Brand partner</span>
           <span>VAT</span>
           <span>Delivery value</span>
-          <span>Collection value</span>
+          <span>Collection</span>
         </div>
-        {% for row in tracker_import.fee_rows_json %}
-          <div class="table-line">
+        {% for row in fees_context.rows %}
+          <div class="table-line fees-line">
             <span>{{ row.sku }}</span>
             <span>{{ row.brand_partner or '-' }}</span>
             <span>{{ row.vatable or '-' }}</span>
-            <span>{{ '{:,.2f}'.format(row.retail_delivery_value or 0) }}</span>
-            <span>{{ '{:,.2f}'.format(row.payment_collection_value or 0) }}</span>
+            <span>{{ '{:,.2f}'.format(row.retail_delivery_value) }}</span>
+            <span>{{ '{:,.2f}'.format(row.payment_collection_value) }}</span>
           </div>
         {% endfor %}
       </div>
     {% else %}
-      <p class="empty-state">No BP New Fees rows were captured from the workbook.</p>
+      <p class="empty-state">No fee rows were captured from the workbook.</p>
     {% endif %}
   </section>
 {% endblock %}

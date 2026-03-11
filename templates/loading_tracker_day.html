@@ -3,13 +3,16 @@
 {% block title %}{{ day.day_name }} Planning | DALA OPERATIONS{% endblock %}
 
 {% block content %}
-  <section class="page-header compact-header">
+  <section class="hero-band">
     <div>
-      <p class="eyebrow">Loading Tracker</p>
-      <h1>{{ day.day_name }} planning</h1>
-      <p class="page-copy">{{ tracker_import.week_label }} now lives here as day planning, grouped loading batches, and LL totals.</p>
+      <p class="eyebrow">Loading Tracker · {{ day.day_name }}</p>
+      <h1>{{ day.day_name }} is now editable inside the planner.</h1>
+      <p class="page-copy">Adjust store rows here, move lines into Pending when needed, and let the loading list regenerate from the live plan.</p>
     </div>
-    <div class="header-chip">{{ day.batch_count }} batch{% if day.batch_count != 1 %}es{% endif %}</div>
+    <div class="actions">
+      <a class="secondary-button" href="{{ url_for('loading_tracker_import_view', import_id=tracker_import.id) }}">Back to week</a>
+      <a class="primary-button" href="{{ url_for('loading_tracker_day_new_row', import_id=tracker_import.id, day_name=day.day_name) }}">Add planning row</a>
+    </div>
   </section>
 
   <nav class="tracker-day-nav" aria-label="Day navigation">
@@ -17,95 +20,92 @@
       <a class="tracker-day-link {% if item.day_name == day.day_name %}is-active{% endif %}" href="{{ url_for('loading_tracker_day_view', import_id=tracker_import.id, day_name=item.day_name) }}">{{ item.day_name }}</a>
     {% endfor %}
     <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_pending_view', import_id=tracker_import.id) }}">Pending</a>
-    <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_inventory_view', import_id=tracker_import.id) }}">Inventory</a>
+    <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_inventory_view', import_id=tracker_import.id) }}">G2G</a>
     <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_fees_view', import_id=tracker_import.id) }}">Fees</a>
   </nav>
 
-  <section class="operations-summary-grid">
-    <article class="panel summary-card">
-      <span class="panel-label">G2G</span>
-      <strong>{{ '{:,.2f}'.format(day.g2g_total or 0) }}</strong>
-      <span class="review-subtle">okay to plan out</span>
+  <section class="stat-row">
+    <article class="glass-card stat-card">
+      <span class="panel-label">G2G at start</span>
+      <strong>{{ '{:,.2f}'.format(day_context.metrics.g2g_total) }}</strong>
+      <small>available before {{ day.day_name }} planning</small>
     </article>
-    <article class="panel summary-card">
-      <span class="panel-label">Loaded out</span>
-      <strong>{{ '{:,.2f}'.format(day.loaded_total or 0) }}</strong>
-      <span class="review-subtle">already planned for loading</span>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Planned out</span>
+      <strong>{{ '{:,.2f}'.format(day_context.metrics.loaded_total) }}</strong>
+      <small>live quantity in the day plan</small>
     </article>
-    <article class="panel summary-card">
+    <article class="glass-card stat-card">
       <span class="panel-label">Remaining</span>
-      <strong>{{ '{:,.2f}'.format(day.remaining_total or 0) }}</strong>
-      <span class="review-subtle">left after loading</span>
+      <strong>{{ '{:,.2f}'.format(day_context.metrics.remaining_total) }}</strong>
+      <small>after this day is loaded</small>
     </article>
-    <article class="panel summary-card">
-      <span class="panel-label">Total value</span>
-      <strong>{{ '{:,.0f}'.format(day.total_value or 0) }}</strong>
-      <span class="review-subtle">{{ day.active_store_count }} store row{% if day.active_store_count != 1 %}s{% endif %}</span>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Batch count</span>
+      <strong>{{ day_context.metrics.batch_count }}</strong>
+      <small>{{ day_context.metrics.active_store_count }} store rows</small>
     </article>
   </section>
 
-  <section class="content-grid content-grid-wide">
-    <article class="panel">
-      <div class="panel-head compact">
+  <section class="content-split">
+    <article class="glass-card">
+      <div class="module-head compact">
         <div>
-          <p class="eyebrow">Planning batches</p>
-          <h2>Load 1 to Load 4</h2>
+          <p class="eyebrow">Day planner</p>
+          <h2>Store rows</h2>
         </div>
       </div>
-      {% if grouped_batches %}
-        <div class="batch-card-grid">
-          {% for batch in grouped_batches %}
-            <section class="batch-card">
-              <div class="batch-card-head">
+      {% if day_context.rows %}
+        <div class="planner-list">
+          {% for row in day_context.rows %}
+            <section class="planner-card">
+              <div class="planner-card-top">
                 <div>
-                  <span class="panel-label">{{ batch.batch_name }}</span>
-                  <strong>{{ batch.store_count }} store{% if batch.store_count != 1 %}s{% endif %}</strong>
+                  <span class="mini-chip">{{ row.batch_name }}</span>
+                  <h3>{{ row.store_name }}</h3>
+                  <p>{{ row.region or 'No region' }}{% if row.delivery_date %} · {{ row.delivery_date }}{% endif %}</p>
                 </div>
-                <div class="batch-card-metrics">
-                  <span>Qty {{ '{:,.2f}'.format(batch.total_quantity) }}</span>
-                  <span>Value {{ '{:,.0f}'.format(batch.total_value) }}</span>
+                <div class="planner-card-metrics">
+                  <strong>{{ '{:,.2f}'.format(row.total_quantity) }}</strong>
+                  <small>{{ row.product_count }} items</small>
                 </div>
               </div>
-              <div class="batch-store-list">
-                {% for row in batch.rows[:10] %}
-                  <div class="batch-store-row">
-                    <div>
-                      <strong>{{ row.store_name }}</strong>
-                      <small>{{ row.region or 'No region' }}{% if row.tier %} · {{ row.tier }}{% endif %}</small>
-                    </div>
-                    <div class="batch-store-meta">
-                      <span>{{ '{:,.2f}'.format(row.total_quantity) }}</span>
-                      <small>{{ row.product_count }} item{% if row.product_count != 1 %}s{% endif %}</small>
-                    </div>
-                  </div>
+              <div class="planner-sku-list">
+                {% for item in row.top_items %}
+                  <span>{{ item.sku }} <strong>{{ item.quantity }}</strong></span>
                 {% endfor %}
+              </div>
+              <div class="row-actions">
+                <a class="secondary-button" href="{{ url_for('loading_tracker_row_edit', import_id=tracker_import.id, row_id=row.id) }}">Edit row</a>
+                <form action="{{ url_for('loading_tracker_row_move', import_id=tracker_import.id, row_id=row.id) }}" method="post">
+                  <input type="hidden" name="target_day_name" value="__pending__">
+                  <button class="text-button danger" type="submit">Move to pending</button>
+                </form>
               </div>
             </section>
           {% endfor %}
         </div>
       {% else %}
-        <p class="empty-state">No active planning rows were found for this day.</p>
+        <p class="empty-state">No store rows are planned for {{ day.day_name }} yet.</p>
       {% endif %}
     </article>
 
-    <article class="panel">
-      <div class="panel-head compact">
+    <article class="glass-card">
+      <div class="module-head compact">
         <div>
-          <p class="eyebrow">Loading list</p>
-          <h2>LL {{ day.day_name }}</h2>
+          <p class="eyebrow">Generated LL</p>
+          <h2>Load 1 to Load 4</h2>
         </div>
       </div>
-      <div class="tracker-overview-stack ll-summary-stack">
-        <div class="tracker-overview-row"><span class="metric-label">Load 1</span><strong>{{ '{:,.2f}'.format(day.load_1_total or 0) }}</strong></div>
-        <div class="tracker-overview-row"><span class="metric-label">Load 2</span><strong>{{ '{:,.2f}'.format(day.load_2_total or 0) }}</strong></div>
-        <div class="tracker-overview-row"><span class="metric-label">Load 3</span><strong>{{ '{:,.2f}'.format(day.load_3_total or 0) }}</strong></div>
-        <div class="tracker-overview-row"><span class="metric-label">Load 4</span><strong>{{ '{:,.2f}'.format(day.load_4_total or 0) }}</strong></div>
-        <div class="tracker-overview-row"><span class="metric-label">Total</span><strong>{{ '{:,.2f}'.format(day.load_total or 0) }}</strong></div>
+      <div class="ll-total-grid">
+        <div><span>Load 1</span><strong>{{ '{:,.2f}'.format(day_context.metrics.load_1_total) }}</strong></div>
+        <div><span>Load 2</span><strong>{{ '{:,.2f}'.format(day_context.metrics.load_2_total) }}</strong></div>
+        <div><span>Load 3</span><strong>{{ '{:,.2f}'.format(day_context.metrics.load_3_total) }}</strong></div>
+        <div><span>Load 4</span><strong>{{ '{:,.2f}'.format(day_context.metrics.load_4_total) }}</strong></div>
       </div>
-
-      {% if day.load_rows_json %}
-        <div class="data-table line-table loading-list-table">
-          <div class="table-line table-head-line">
+      {% if day_context.ll_rows %}
+        <div class="data-table">
+          <div class="table-line table-head-line ll-table-line">
             <span>SKU</span>
             <span>L1</span>
             <span>L2</span>
@@ -113,8 +113,8 @@
             <span>L4</span>
             <span>Total</span>
           </div>
-          {% for row in day.load_rows_json[:18] %}
-            <div class="table-line">
+          {% for row in day_context.ll_rows[:18] %}
+            <div class="table-line ll-table-line">
               <span>{{ row.sku }}</span>
               <span>{{ row.load_1 }}</span>
               <span>{{ row.load_2 }}</span>
@@ -125,33 +125,74 @@
           {% endfor %}
         </div>
       {% else %}
-        <p class="empty-state">No LL rows were captured for this day.</p>
+        <p class="empty-state">The loading list will appear here as soon as the day has planned rows.</p>
       {% endif %}
     </article>
   </section>
 
-  <section class="panel">
-    <div class="panel-head compact">
-      <div>
-        <p class="eyebrow">Top products</p>
-        <h2>Most planned SKUs for {{ day.day_name }}</h2>
-      </div>
-    </div>
-    {% if day.top_products_json %}
-      <div class="data-table line-table">
-        <div class="table-line table-head-line">
-          <span>SKU</span>
-          <span>Quantity</span>
+  <section class="content-split">
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Batch view</p>
+          <h2>Loading batches</h2>
         </div>
-        {% for item in day.top_products_json %}
-          <div class="table-line">
-            <span>{{ item.sku }}</span>
-            <span>{{ item.quantity }}</span>
-          </div>
-        {% endfor %}
       </div>
-    {% else %}
-      <p class="empty-state">No positive product quantities were found for this day.</p>
-    {% endif %}
+      {% if day_context.grouped_batches %}
+        <div class="batch-card-grid">
+          {% for batch in day_context.grouped_batches %}
+            <section class="batch-card">
+              <div class="batch-card-head">
+                <div>
+                  <span class="panel-label">{{ batch.batch_name }}</span>
+                  <strong>{{ batch.store_count }} stores</strong>
+                </div>
+                <div class="batch-card-metrics">
+                  <span>Qty {{ '{:,.2f}'.format(batch.total_quantity) }}</span>
+                  <span>Value {{ '{:,.0f}'.format(batch.total_value) }}</span>
+                </div>
+              </div>
+              <div class="batch-store-list">
+                {% for row in batch.rows[:8] %}
+                  <div class="batch-store-row">
+                    <div>
+                      <strong>{{ row.store_name }}</strong>
+                      <small>{{ row.region or 'No region' }}</small>
+                    </div>
+                    <div class="batch-store-meta">
+                      <span>{{ '{:,.2f}'.format(row.total_quantity) }}</span>
+                      <small>{{ row.product_count }} items</small>
+                    </div>
+                  </div>
+                {% endfor %}
+              </div>
+            </section>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No batches are active for this day yet.</p>
+      {% endif %}
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Inventory watch</p>
+          <h2>Pressure points</h2>
+        </div>
+      </div>
+      {% if day_context.inventory_warnings %}
+        <div class="warning-stack">
+          {% for item in day_context.inventory_warnings %}
+            <div class="warning-row">
+              <span>{{ item.sku }}</span>
+              <strong>{{ item.remaining }}</strong>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No negative or exhausted SKUs after this day.</p>
+      {% endif %}
+    </article>
   </section>
 {% endblock %}

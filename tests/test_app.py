@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from openpyxl import Workbook
 
 from app import _database_uri, create_app
-from models import LoadingTrackerDay, LoadingTrackerImport, Product, ProductAlias, UploadRun, db
+from models import LoadingTrackerDay, LoadingTrackerImport, LoadingTrackerRow, Product, ProductAlias, UploadRun, db
 from services import bootstrap_seed_uom_if_empty
 
 
@@ -704,9 +704,10 @@ def test_general_dashboard_and_delivery_note_module_render() -> None:
         response = client.get("/")
         assert response.status_code == 200
         html = response.get_data(as_text=True)
-        assert "One place for planning, loading, and delivery-note export." in html
+        assert "Planning, loading, exports, and future automators in one calm workspace." in html
         assert "Delivery Note" in html
         assert "Loading Tracker" in html
+        assert "SKU Automator" in html
 
         response = client.get("/delivery-note")
         assert response.status_code == 200
@@ -746,6 +747,8 @@ def test_loading_tracker_import_builds_initial_module_views() -> None:
             mon = db.session.query(LoadingTrackerDay).filter_by(day_name="Mon").one()
             assert tracker_import.assumptions_sku_count == 2
             assert len(tracker_import.pending_rows_json) == 1
+            assert len(tracker_import.planning_rows) == 5
+            assert len(tracker_import.inventory_items) == 2
             assert mon.batch_count == 2
             assert mon.active_store_count == 2
             assert float(mon.load_total) == 4.0
@@ -754,14 +757,71 @@ def test_loading_tracker_import_builds_initial_module_views() -> None:
         day_response = client.get(f"/loading-tracker/imports/{import_id}/days/Mon")
         assert day_response.status_code == 200
         day_html = day_response.get_data(as_text=True)
-        assert "Mon planning" in day_html
-        assert "Load 1 to Load 4" in day_html
+        assert "Mon is now editable inside the planner." in day_html
+        assert "Generated LL" in day_html
         assert "Store One" in day_html
 
         pending_response = client.get(f"/loading-tracker/imports/{import_id}/pending")
         assert pending_response.status_code == 200
-        assert "Pending Store" in pending_response.get_data(as_text=True)
+        pending_html = pending_response.get_data(as_text=True)
+        assert "Pending is now a live queue" in pending_html
+        assert "Pending Store" in pending_html
 
         with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_loading_tracker_live_move_and_inventory_adjustment() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        workbook = build_loading_tracker_workbook()
+
+        response = client.post(
+            "/loading-tracker/import",
+            data={"loading_tracker_workbook": (BytesIO(workbook.getvalue()), "Week 4 Loading Tracker.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        with app.app_context():
+            tracker_import = db.session.query(LoadingTrackerImport).one()
+            pending_row = db.session.query(LoadingTrackerRow).filter_by(row_state="pending").one()
+            import_id = tracker_import.id
+            pending_row_id = pending_row.id
+
+        response = client.post(
+            f"/loading-tracker/imports/{import_id}/rows/{pending_row_id}/move",
+            data={"target_day_name": "Tues"},
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "moved into Tues" in html
+        assert "Pending Store" in html
+
+        response = client.post(
+            f"/loading-tracker/imports/{import_id}/inventory",
+            data={"sku_name": "SKU Alpha", "added_qty": "3", "opening_g2g_qty": "12", "opening_remaining_qty": "10"},
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "Inventory for" in html and "was updated" in html
+
+        with app.app_context():
+            pending_count = db.session.query(LoadingTrackerRow).filter_by(row_state="pending").count()
+            tracker_import = db.session.query(LoadingTrackerImport).one()
+            sku_alpha = next(item for item in tracker_import.inventory_items if item.sku_name == "SKU Alpha")
+            assert pending_count == 0
+            assert float(sku_alpha.added_qty) == 3.0
             db.session.remove()
             db.engine.dispose()

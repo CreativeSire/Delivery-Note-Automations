@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_title }} | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="hero-band">
+    <div>
+      <p class="eyebrow">Loading Tracker · Planner</p>
+      <h1>{{ page_title }}</h1>
+      <p class="page-copy">Use one row editor for day planning and Pending so the workflow stays clean and consistent.</p>
+    </div>
+    <div class="actions">
+      <a class="secondary-button" href="{{ back_target }}">Back</a>
+    </div>
+  </section>
+
+  <section class="content-split row-form-layout">
+    <article class="glass-card">
+      <form class="form-stack" method="post">
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Store name</span>
+            <input name="store_name" type="text" value="{{ editor.row.store_name if editor.row else '' }}" required>
+          </label>
+          <label class="field">
+            <span class="field-label">Target</span>
+            <select name="target_day_name">
+              {% for option in editor.day_options %}
+                <option value="{{ option.value }}" {% if option.value == editor.selected_day_name %}selected{% endif %}>{{ option.label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Batch</span>
+            <select name="batch_name">
+              {% set current_batch = editor.row.batch_name if editor.row else 'Load 1' %}
+              {% for option in editor.batch_options %}
+                <option value="{{ option }}" {% if option == current_batch %}selected{% endif %}>{{ option }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Reason</span>
+            <input name="reason_text" type="text" value="{{ editor.row.reason_text if editor.row else '' }}" placeholder="Only needed if this row should stay pending">
+          </label>
+        </div>
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Region</span>
+            <input name="region" type="text" value="{{ editor.row.region if editor.row else '' }}">
+          </label>
+          <label class="field">
+            <span class="field-label">Delivery date</span>
+            <input name="delivery_date" type="text" value="{{ editor.row.delivery_date if editor.row else '' }}">
+          </label>
+        </div>
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Contact</span>
+            <input name="contact" type="text" value="{{ editor.row.contact if editor.row else '' }}">
+          </label>
+          <label class="field">
+            <span class="field-label">LP / Route owner</span>
+            <input name="lp" type="text" value="{{ editor.row.lp if editor.row else '' }}">
+          </label>
+        </div>
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Tier</span>
+            <input name="tier" type="text" value="{{ editor.row.tier if editor.row else '' }}">
+          </label>
+          <label class="field">
+            <span class="field-label">Weight</span>
+            <input name="total_weight" type="number" step="0.01" value="{{ editor.row.total_weight if editor.row else '' }}">
+          </label>
+        </div>
+
+        <label class="field">
+          <span class="field-label">Value</span>
+          <input name="total_value" type="number" step="0.01" value="{{ editor.row.total_value if editor.row else '' }}">
+        </label>
+
+        <label class="field">
+          <span class="field-label">SKU quantities</span>
+          <textarea class="planner-textarea" name="items_text" rows="12" required>{{ editor.items_text }}</textarea>
+          <span class="field-hint">Use one line per item, for example: <code>SKU Alpha = 2</code></span>
+        </label>
+
+        <button class="primary-button" type="submit">Save planning row</button>
+      </form>
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Guide</p>
+          <h2>What this row controls</h2>
+        </div>
+      </div>
+      <div class="future-points">
+        <div class="future-point">Choosing a day makes the row part of live planning for that day.</div>
+        <div class="future-point">Choosing Pending removes it from LL and keeps it in the waiting queue.</div>
+        <div class="future-point">Changing item quantities updates generated LL and G2G automatically.</div>
+      </div>
+    </article>
+  </section>
+{% endblock %}

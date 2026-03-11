@@ -3,111 +3,120 @@
 {% block title %}Pending Loads | DALA OPERATIONS{% endblock %}
 
 {% block content %}
-  <section class="page-header compact-header">
+  <section class="hero-band">
     <div>
-      <p class="eyebrow">Loading Tracker</p>
-      <h1>Pending loads</h1>
-      <p class="page-copy">These are the loads still waiting for the right stock position, route decision, or receiving day before they can move into a daily plan.</p>
+      <p class="eyebrow">Loading Tracker · Pending</p>
+      <h1>Pending is now a live queue, not a frozen sheet.</h1>
+      <p class="page-copy">Hold rows here when stock, timing, or receiving-day logic says “not today,” then move them into the right day when the plan is ready.</p>
     </div>
-    <div class="header-chip">{{ tracker_import.pending_rows_json|length }} pending row{% if tracker_import.pending_rows_json|length != 1 %}s{% endif %}</div>
+    <div class="actions">
+      <a class="secondary-button" href="{{ url_for('loading_tracker_import_view', import_id=tracker_import.id) }}">Back to week</a>
+      {% if tracker_import.days %}
+        <a class="primary-button" href="{{ url_for('loading_tracker_day_new_row', import_id=tracker_import.id, day_name=tracker_import.days[0].day_name) }}">Add new row</a>
+      {% endif %}
+    </div>
   </section>
 
   <nav class="tracker-day-nav" aria-label="Tracker helper navigation">
     <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_import_view', import_id=tracker_import.id) }}">Overview</a>
     <a class="tracker-day-link is-active" href="{{ url_for('loading_tracker_pending_view', import_id=tracker_import.id) }}">Pending</a>
-    <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_inventory_view', import_id=tracker_import.id) }}">Inventory</a>
+    <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_inventory_view', import_id=tracker_import.id) }}">G2G</a>
     <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_fees_view', import_id=tracker_import.id) }}">Fees</a>
   </nav>
 
-  <section class="operations-summary-grid">
-    <article class="panel summary-card">
-      <span class="panel-label">Pending G2G</span>
-      <strong>{{ '{:,.2f}'.format(tracker_import.pending_g2g_total or 0) }}</strong>
-      <span class="review-subtle">available but not yet pushed into daily planning</span>
+  <section class="stat-row">
+    <article class="glass-card stat-card">
+      <span class="panel-label">Pending rows</span>
+      <strong>{{ pending_context.total_rows }}</strong>
+      <small>live rows waiting</small>
     </article>
-    <article class="panel summary-card">
-      <span class="panel-label">Loaded total</span>
-      <strong>{{ '{:,.2f}'.format(tracker_import.pending_loaded_total or 0) }}</strong>
-      <span class="review-subtle">currently marked on the pending sheet</span>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Pending quantity</span>
+      <strong>{{ '{:,.2f}'.format(pending_context.total_quantity) }}</strong>
+      <small>across all queued rows</small>
     </article>
-    <article class="panel summary-card">
-      <span class="panel-label">Remaining</span>
-      <strong>{{ '{:,.2f}'.format(tracker_import.pending_remaining_total or 0) }}</strong>
-      <span class="review-subtle">what remains after pending loads are considered</span>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Pending value</span>
+      <strong>{{ '{:,.0f}'.format(pending_context.total_value) }}</strong>
+      <small>still not placed into a day</small>
     </article>
-    <article class="panel summary-card">
+    <article class="glass-card stat-card">
       <span class="panel-label">Top pending SKUs</span>
-      <strong>{{ tracker_import.pending_top_products_json|length }}</strong>
-      <span class="review-subtle">highest quantity products on the pending sheet</span>
+      <strong>{{ pending_context.top_products|length }}</strong>
+      <small>highest pressure items</small>
     </article>
   </section>
 
-  <section class="panel">
-    <div class="panel-head compact">
-      <div>
-        <p class="eyebrow">Pending rows</p>
-        <h2>Stores waiting for planning</h2>
-      </div>
-      <span class="mini-chip">{{ grouped_batches|length }} batch{% if grouped_batches|length != 1 %}es{% endif %}</span>
-    </div>
-    {% if grouped_batches %}
-      <div class="batch-card-grid">
-        {% for batch in grouped_batches %}
-          <section class="batch-card">
-            <div class="batch-card-head">
-              <div>
-                <span class="panel-label">{{ batch.batch_name }}</span>
-                <strong>{{ batch.store_count }} store{% if batch.store_count != 1 %}s{% endif %}</strong>
-              </div>
-              <div class="batch-card-metrics">
-                <span>Qty {{ '{:,.2f}'.format(batch.total_quantity) }}</span>
-                <span>Value {{ '{:,.0f}'.format(batch.total_value) }}</span>
-              </div>
-            </div>
-            <div class="batch-store-list">
-              {% for row in batch.rows[:12] %}
-                <div class="batch-store-row">
-                  <div>
-                    <strong>{{ row.store_name }}</strong>
-                    <small>{{ row.region or 'No region' }}</small>
-                  </div>
-                  <div class="batch-store-meta">
-                    <span>{{ '{:,.2f}'.format(row.total_quantity) }}</span>
-                    <small>{{ '{:,.0f}'.format(row.value) }}</small>
-                  </div>
-                </div>
-              {% endfor %}
-            </div>
-          </section>
-        {% endfor %}
-      </div>
-    {% else %}
-      <p class="empty-state">No pending store rows were captured from the workbook.</p>
-    {% endif %}
-  </section>
-
-  <section class="panel">
-    <div class="panel-head compact">
-      <div>
-        <p class="eyebrow">Top products</p>
-        <h2>Pending SKU pressure</h2>
-      </div>
-    </div>
-    {% if tracker_import.pending_top_products_json %}
-      <div class="data-table line-table">
-        <div class="table-line table-head-line">
-          <span>SKU</span>
-          <span>Quantity</span>
+  <section class="content-split">
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Pending queue</p>
+          <h2>Rows waiting for a day</h2>
         </div>
-        {% for item in tracker_import.pending_top_products_json %}
-          <div class="table-line">
-            <span>{{ item.sku }}</span>
-            <span>{{ item.quantity }}</span>
-          </div>
-        {% endfor %}
       </div>
-    {% else %}
-      <p class="empty-state">No pending SKU totals were captured.</p>
-    {% endif %}
+      {% if pending_context.rows %}
+        <div class="planner-list">
+          {% for row in pending_context.rows %}
+            <section class="planner-card pending-card">
+              <div class="planner-card-top">
+                <div>
+                  <span class="mini-chip">{{ row.batch_name }}</span>
+                  <h3>{{ row.store_name }}</h3>
+                  <p>{{ row.reason_text or 'Waiting for planning decision' }}</p>
+                </div>
+                <div class="planner-card-metrics">
+                  <strong>{{ '{:,.2f}'.format(row.total_quantity) }}</strong>
+                  <small>{{ row.product_count }} items</small>
+                </div>
+              </div>
+              <div class="planner-sku-list">
+                {% for item in row.top_items %}
+                  <span>{{ item.sku }} <strong>{{ item.quantity }}</strong></span>
+                {% endfor %}
+              </div>
+              <div class="row-actions row-actions-stacked">
+                <form class="inline-move-form" action="{{ url_for('loading_tracker_row_move', import_id=tracker_import.id, row_id=row.id) }}" method="post">
+                  <select name="target_day_name">
+                    {% for option in pending_context.day_options %}
+                      <option value="{{ option.value }}">{{ option.label }}</option>
+                    {% endfor %}
+                  </select>
+                  <button class="primary-button" type="submit">Move into day</button>
+                </form>
+                <a class="secondary-button" href="{{ url_for('loading_tracker_row_edit', import_id=tracker_import.id, row_id=row.id) }}">Edit row</a>
+              </div>
+            </section>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No live pending rows right now.</p>
+      {% endif %}
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Pressure view</p>
+          <h2>Pending SKU build-up</h2>
+        </div>
+      </div>
+      {% if pending_context.top_products %}
+        <div class="data-table">
+          <div class="table-line table-head-line two-col-line">
+            <span>SKU</span>
+            <span>Quantity</span>
+          </div>
+          {% for item in pending_context.top_products %}
+            <div class="table-line two-col-line">
+              <span>{{ item.sku }}</span>
+              <span>{{ item.quantity }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">Pending SKU pressure will appear here once rows are held back.</p>
+      {% endif %}
+    </article>
   </section>
 {% endblock %}

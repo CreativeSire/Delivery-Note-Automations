@@ -106,6 +106,24 @@ class LoadingTrackerImport(db.Model):
         cascade="all, delete-orphan",
         order_by="LoadingTrackerDay.day_order.asc()",
     )
+    planning_rows = db.relationship(
+        "LoadingTrackerRow",
+        back_populates="tracker_import",
+        cascade="all, delete-orphan",
+        order_by="LoadingTrackerRow.sort_order.asc(), LoadingTrackerRow.id.asc()",
+    )
+    inventory_items = db.relationship(
+        "LoadingTrackerInventoryItem",
+        back_populates="tracker_import",
+        cascade="all, delete-orphan",
+        order_by="LoadingTrackerInventoryItem.sort_order.asc(), LoadingTrackerInventoryItem.id.asc()",
+    )
+    fee_items = db.relationship(
+        "LoadingTrackerFeeItem",
+        back_populates="tracker_import",
+        cascade="all, delete-orphan",
+        order_by="LoadingTrackerFeeItem.id.asc()",
+    )
 
 
 class LoadingTrackerDay(db.Model):
@@ -131,3 +149,75 @@ class LoadingTrackerDay(db.Model):
     load_rows_json = db.Column(db.JSON, nullable=False, default=list)
 
     tracker_import = db.relationship("LoadingTrackerImport", back_populates="days")
+    planning_rows = db.relationship(
+        "LoadingTrackerRow",
+        back_populates="day",
+        cascade="all, delete-orphan",
+        order_by="LoadingTrackerRow.sort_order.asc(), LoadingTrackerRow.id.asc()",
+    )
+
+
+class LoadingTrackerRow(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    tracker_import_id = db.Column(db.String(32), db.ForeignKey("loading_tracker_import.id"), nullable=False, index=True)
+    day_id = db.Column(db.Integer, db.ForeignKey("loading_tracker_day.id"), nullable=True, index=True)
+    row_state = db.Column(db.String(32), nullable=False, default="planned", index=True)
+    source_kind = db.Column(db.String(32), nullable=False, default="import")
+    batch_name = db.Column(db.String(64), nullable=False, default="Load 1")
+    store_name = db.Column(db.String(255), nullable=False)
+    contact = db.Column(db.String(255), nullable=True)
+    lp = db.Column(db.String(255), nullable=True)
+    tier = db.Column(db.String(255), nullable=True)
+    region = db.Column(db.String(255), nullable=True)
+    delivery_date = db.Column(db.String(64), nullable=True)
+    reason_text = db.Column(db.String(255), nullable=True)
+    total_weight = db.Column(db.Numeric(14, 4), nullable=True)
+    total_value = db.Column(db.Numeric(14, 4), nullable=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+    tracker_import = db.relationship("LoadingTrackerImport", back_populates="planning_rows")
+    day = db.relationship("LoadingTrackerDay", back_populates="planning_rows")
+    items = db.relationship(
+        "LoadingTrackerRowItem",
+        back_populates="row",
+        cascade="all, delete-orphan",
+        order_by="LoadingTrackerRowItem.id.asc()",
+    )
+
+
+class LoadingTrackerRowItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    row_id = db.Column(db.Integer, db.ForeignKey("loading_tracker_row.id"), nullable=False, index=True)
+    sku_name = db.Column(db.String(255), nullable=False)
+    quantity = db.Column(db.Numeric(14, 4), nullable=False, default=0)
+
+    row = db.relationship("LoadingTrackerRow", back_populates="items")
+
+
+class LoadingTrackerInventoryItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    tracker_import_id = db.Column(db.String(32), db.ForeignKey("loading_tracker_import.id"), nullable=False, index=True)
+    sku_name = db.Column(db.String(255), nullable=False)
+    opening_g2g_qty = db.Column(db.Numeric(14, 4), nullable=True)
+    opening_remaining_qty = db.Column(db.Numeric(14, 4), nullable=True)
+    added_qty = db.Column(db.Numeric(14, 4), nullable=False, default=0)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+    tracker_import = db.relationship("LoadingTrackerImport", back_populates="inventory_items")
+
+
+class LoadingTrackerFeeItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    tracker_import_id = db.Column(db.String(32), db.ForeignKey("loading_tracker_import.id"), nullable=False, index=True)
+    brand_partner = db.Column(db.String(255), nullable=True)
+    sku_name = db.Column(db.String(255), nullable=False)
+    vatable_text = db.Column(db.String(64), nullable=True)
+    retail_delivery_value = db.Column(db.Numeric(14, 4), nullable=True)
+    payment_collection_value = db.Column(db.Numeric(14, 4), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+
+    tracker_import = db.relationship("LoadingTrackerImport", back_populates="fee_items")
