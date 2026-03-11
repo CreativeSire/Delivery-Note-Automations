@@ -29,7 +29,7 @@
           <h2>Bring in the planning workbook</h2>
         </div>
       </div>
-      <form class="form-stack" action="{{ url_for('upload_loading_tracker') }}" method="post" enctype="multipart/form-data">
+      <form class="form-stack" action="{{ url_for('upload_loading_tracker') }}" method="post" enctype="multipart/form-data" id="loading-tracker-import-form">
         <label class="file-field premium-file-field">
           <span class="field-label">Workbook</span>
           <input name="loading_tracker_workbook" type="file" accept=".xlsx,.xls" required>
@@ -40,7 +40,8 @@
           <span class="info-chip">Opening inventory</span>
           <span class="info-chip">BP New Fees</span>
         </div>
-        <button class="primary-button" type="submit">Import weekly tracker</button>
+        <button class="primary-button" type="submit" data-submit-button>Import weekly tracker</button>
+        <p class="subtle-note" data-submit-note hidden>Importing workbook and building live planning data. Large weekly files can take a few seconds.</p>
       </form>
     </article>
 
@@ -161,4 +162,21 @@
       </article>
     </section>
   {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    (() => {
+      const form = document.getElementById("loading-tracker-import-form");
+      if (!form) return;
+      const button = form.querySelector("[data-submit-button]");
+      const note = form.querySelector("[data-submit-note]");
+      form.addEventListener("submit", () => {
+        if (!button) return;
+        button.disabled = true;
+        button.textContent = "Importing weekly tracker...";
+        if (note) note.hidden = false;
+      });
+    })();
+  </script>
 {% endblock %}

@@ -125,6 +125,7 @@ def build_loading_tracker_summary() -> LoadingTrackerSummary:
 def import_loading_tracker_workbook(file_storage: Any) -> LoadingTrackerImport:
     workbook = _load_workbook_from_upload(file_storage)
     filename = file_storage.filename or "loading-tracker.xlsx"
+    imported_pending_count = 0
 
     present_day_sheets = [name for name in DAY_SHEET_NAMES if name in workbook.sheetnames]
     if not present_day_sheets:
@@ -136,7 +137,6 @@ def import_loading_tracker_workbook(file_storage: Any) -> LoadingTrackerImport:
         week_label=_clean_filename_part(Path(filename).stem, "Loading Tracker"),
     )
     db.session.add(tracker_import)
-    db.session.flush()
 
     assumptions_sheet = workbook["Assumptions"] if "Assumptions" in workbook.sheetnames else None
     if assumptions_sheet is not None:
@@ -170,6 +170,7 @@ def import_loading_tracker_workbook(file_storage: Any) -> LoadingTrackerImport:
         tracker_import.pending_remaining_total = pending["remaining_total"]
         tracker_import.pending_rows_json = pending["store_rows"]
         tracker_import.pending_top_products_json = pending["top_products"]
+        imported_pending_count = len(pending["store_rows"])
         for sort_order, row_data in enumerate(pending["store_rows"], start=1):
             _save_row_record(
                 tracker_import=tracker_import,
@@ -209,7 +210,7 @@ def import_loading_tracker_workbook(file_storage: Any) -> LoadingTrackerImport:
         load_sheet = workbook[LL_SHEET_MAP[day_name]] if LL_SHEET_MAP.get(day_name) in workbook.sheetnames else None
         parsed_day = _parse_day_sheet(planning_sheet, day_name, load_sheet)
         day_record = LoadingTrackerDay(
-            tracker_import_id=tracker_import.id,
+            tracker_import=tracker_import,
             day_name=day_name,
             day_order=order,
             g2g_total=parsed_day["g2g_total"],
@@ -230,7 +231,6 @@ def import_loading_tracker_workbook(file_storage: Any) -> LoadingTrackerImport:
             load_rows_json=parsed_day["load_rows"],
         )
         db.session.add(day_record)
-        db.session.flush()
 
         for sort_order, row_data in enumerate(parsed_day["store_rows"], start=1):
             _save_row_record(
@@ -250,8 +250,8 @@ def import_loading_tracker_workbook(file_storage: Any) -> LoadingTrackerImport:
         entity_name=tracker_import.week_label,
         details={
             "filename": tracker_import.filename,
-            "day_count": len(tracker_import.days),
-            "pending_rows": len([row for row in tracker_import.planning_rows if row.row_state == PENDING_STATE]),
+            "day_count": len(present_day_sheets),
+            "pending_rows": imported_pending_count,
         },
     )
     db.session.commit()
@@ -991,8 +991,8 @@ def _save_row_record(
     reason_text: str | None = None,
 ) -> None:
     record = LoadingTrackerRow(
-        tracker_import_id=tracker_import.id,
-        day_id=day.id if day is not None else None,
+        tracker_import=tracker_import,
+        day=day,
         row_state=row_state,
         source_kind=source_kind,
         batch_name=row_data.get("batch_name") or "Unassigned",
@@ -1008,12 +1008,10 @@ def _save_row_record(
         sort_order=sort_order,
     )
     db.session.add(record)
-    db.session.flush()
 
     for item in row_data.get("items", []):
-        db.session.add(
+        record.items.append(
             LoadingTrackerRowItem(
-                row_id=record.id,
                 sku_name=item["sku"],
                 quantity=_decimal_or_none(item["quantity"]) or Decimal("0"),
             )
@@ -1377,8 +1375,12 @@ def _next_sort_order(
 
 def _parse_day_sheet(sheet: Any, day_name: str, load_sheet: Any | None) -> dict[str, Any]:
     grid = _locate_day_grid(sheet)
+    max_row, _ = _sheet_bounds(sheet)
+    cell = sheet.cell
+    product_headers = grid["product_headers"]
+    store_col = grid["store_col"]
     summary_rows = {
-        key: _parse_metric_row(sheet, grid["product_headers"], label)
+        key: _parse_metric_row(sheet, product_headers, label)
         for key, label in PLANNING_SUMMARY_LABELS.items()
     }
 
@@ -1387,30 +1389,30 @@ def _parse_day_sheet(sheet: Any, day_name: str, load_sheet: Any | None) -> dict[
     current_batch = ""
     row_index = grid["header_row_index"] + 1
 
-    while row_index <= sheet.max_row:
-        batch_value = _string_value(sheet.cell(row_index, 1).value)
+    while row_index <= max_row:
+        batch_value = _string_value(cell(row_index, 1).value)
         if batch_value.lower().startswith("load "):
             current_batch = batch_value
             row_index += 1
             continue
 
-        if _normalize_text(sheet.cell(row_index, grid["store_col"]).value) == "load for external delivery":
+        if _normalize_text(cell(row_index, store_col).value) == "load for external delivery":
             row_index += 1
             continue
 
-        store_name = _string_value(sheet.cell(row_index, grid["store_col"]).value)
+        store_name = _string_value(cell(row_index, store_col).value)
         quantities: list[dict[str, Any]] = []
         total_quantity = 0.0
-        for column_index, sku_name in grid["product_headers"]:
-            quantity = _float_value(sheet.cell(row_index, column_index).value)
+        for column_index, sku_name in product_headers:
+            quantity = _float_value(cell(row_index, column_index).value)
             if quantity <= 0:
                 continue
             total_quantity += quantity
             quantities.append({"sku": sku_name, "quantity": round(quantity, 2)})
             active_product_totals[sku_name] = active_product_totals.get(sku_name, 0.0) + quantity
 
-        weight = _float_value(sheet.cell(row_index, grid["weight_col"]).value) if grid["weight_col"] else 0.0
-        value = _float_value(sheet.cell(row_index, grid["value_col"]).value) if grid["value_col"] else 0.0
+        weight = _float_value(cell(row_index, grid["weight_col"]).value) if grid["weight_col"] else 0.0
+        value = _float_value(cell(row_index, grid["value_col"]).value) if grid["value_col"] else 0.0
 
         if not store_name and total_quantity == 0 and weight == 0 and value == 0:
             row_index += 1
@@ -1429,11 +1431,11 @@ def _parse_day_sheet(sheet: Any, day_name: str, load_sheet: Any | None) -> dict[
             {
                 "batch_name": current_batch or "Unassigned",
                 "store_name": store_name,
-                "contact": _string_value(sheet.cell(row_index, grid["contact_col"]).value) if grid["contact_col"] else "",
-                "lp": _string_value(sheet.cell(row_index, grid["lp_col"]).value) if grid["lp_col"] else "",
-                "tier": _string_value(sheet.cell(row_index, grid["tier_col"]).value) if grid["tier_col"] else "",
-                "region": _string_value(sheet.cell(row_index, grid["region_col"]).value) if grid["region_col"] else "",
-                "delivery_date": _string_value(sheet.cell(row_index, grid["date_col"]).value) if grid["date_col"] else "",
+                "contact": _string_value(cell(row_index, grid["contact_col"]).value) if grid["contact_col"] else "",
+                "lp": _string_value(cell(row_index, grid["lp_col"]).value) if grid["lp_col"] else "",
+                "tier": _string_value(cell(row_index, grid["tier_col"]).value) if grid["tier_col"] else "",
+                "region": _string_value(cell(row_index, grid["region_col"]).value) if grid["region_col"] else "",
+                "delivery_date": _string_value(cell(row_index, grid["date_col"]).value) if grid["date_col"] else "",
                 "weight": round(weight, 2),
                 "value": round(value, 2),
                 "total_quantity": round(total_quantity, 2),
@@ -1470,31 +1472,35 @@ def _parse_day_sheet(sheet: Any, day_name: str, load_sheet: Any | None) -> dict[
 
 def _parse_support_sheet(sheet: Any) -> dict[str, Any]:
     grid = _locate_support_grid(sheet)
-    g2g = _parse_metric_row(sheet, grid["product_headers"], PLANNING_SUMMARY_LABELS["g2g_total"])
-    loaded = _parse_metric_row(sheet, grid["product_headers"], PLANNING_SUMMARY_LABELS["loaded_total"])
-    remaining = _parse_metric_row(sheet, grid["product_headers"], PLANNING_SUMMARY_LABELS["remaining_total"])
+    max_row, _ = _sheet_bounds(sheet)
+    cell = sheet.cell
+    product_headers = grid["product_headers"]
+    store_col = grid["store_col"]
+    g2g = _parse_metric_row(sheet, product_headers, PLANNING_SUMMARY_LABELS["g2g_total"])
+    loaded = _parse_metric_row(sheet, product_headers, PLANNING_SUMMARY_LABELS["loaded_total"])
+    remaining = _parse_metric_row(sheet, product_headers, PLANNING_SUMMARY_LABELS["remaining_total"])
 
     batch_rows = []
     if grid["header_row_index"] is not None and grid["store_col"]:
         current_batch = ""
         row_index = grid["header_row_index"] + 1
-        while row_index <= sheet.max_row:
-            batch_value = _string_value(sheet.cell(row_index, 1).value)
+        while row_index <= max_row:
+            batch_value = _string_value(cell(row_index, 1).value)
             if batch_value.lower().startswith("load "):
                 current_batch = batch_value
                 row_index += 1
                 continue
-            if _normalize_text(sheet.cell(row_index, grid["store_col"]).value) == "load for external delivery":
+            if _normalize_text(cell(row_index, store_col).value) == "load for external delivery":
                 row_index += 1
                 continue
-            store_name = _string_value(sheet.cell(row_index, grid["store_col"]).value)
+            store_name = _string_value(cell(row_index, store_col).value)
             if not store_name:
                 row_index += 1
                 continue
             items: list[dict[str, Any]] = []
             total_quantity = 0.0
-            for column_index, sku_name in grid["product_headers"]:
-                quantity = _float_value(sheet.cell(row_index, column_index).value)
+            for column_index, sku_name in product_headers:
+                quantity = _float_value(cell(row_index, column_index).value)
                 if quantity <= 0:
                     continue
                 total_quantity += quantity
@@ -1505,9 +1511,9 @@ def _parse_support_sheet(sheet: Any) -> dict[str, Any]:
                     {
                         "batch_name": current_batch or "Pending",
                         "store_name": store_name,
-                        "contact": _string_value(sheet.cell(row_index, grid["contact_col"]).value) if grid["contact_col"] else "",
-                        "region": _string_value(sheet.cell(row_index, grid["region_col"]).value) if grid["region_col"] else "",
-                        "value": round(_float_value(sheet.cell(row_index, grid["value_col"]).value), 2)
+                        "contact": _string_value(cell(row_index, grid["contact_col"]).value) if grid["contact_col"] else "",
+                        "region": _string_value(cell(row_index, grid["region_col"]).value) if grid["region_col"] else "",
+                        "value": round(_float_value(cell(row_index, grid["value_col"]).value), 2)
                         if grid["value_col"]
                         else 0.0,
                         "total_quantity": round(total_quantity, 2),
@@ -1574,11 +1580,13 @@ def _parse_metric_row(sheet: Any, product_headers: list[tuple[int, str]], label:
 
 
 def _parse_assumptions_sheet(sheet: Any) -> dict[str, int]:
+    max_row, _ = _sheet_bounds(sheet)
+    cell = sheet.cell
     sku_count = 0
     stores = set()
-    for row_index in range(2, sheet.max_row + 1):
-        sku_name = _string_value(sheet.cell(row_index, 2).value)
-        store_name = _string_value(sheet.cell(row_index, 7).value)
+    for row_index in range(2, max_row + 1):
+        sku_name = _string_value(cell(row_index, 2).value)
+        store_name = _string_value(cell(row_index, 7).value)
         if sku_name:
             sku_count += 1
         if store_name:
@@ -1587,9 +1595,11 @@ def _parse_assumptions_sheet(sheet: Any) -> dict[str, int]:
 
 
 def _parse_fee_sheet(sheet: Any) -> dict[str, Any]:
+    max_row, max_column = _sheet_bounds(sheet)
+    cell = sheet.cell
     header_map = {}
-    for column_index in range(1, sheet.max_column + 1):
-        header_map[_normalize_text(sheet.cell(1, column_index).value)] = column_index
+    for column_index in range(1, max_column + 1):
+        header_map[_normalize_text(cell(1, column_index).value)] = column_index
 
     sku_col = header_map.get("sku")
     delivery_value_col = header_map.get("retail deliveries value")
@@ -1600,19 +1610,19 @@ def _parse_fee_sheet(sheet: Any) -> dict[str, Any]:
     rows = []
     total_delivery_value = 0.0
     total_payment_value = 0.0
-    for row_index in range(2, sheet.max_row + 1):
-        sku_name = _string_value(sheet.cell(row_index, sku_col).value)
+    for row_index in range(2, max_row + 1):
+        sku_name = _string_value(cell(row_index, sku_col).value)
         if not sku_name:
             continue
-        delivery_value = _float_value(sheet.cell(row_index, delivery_value_col).value) if delivery_value_col else 0.0
-        payment_value = _float_value(sheet.cell(row_index, payment_value_col).value) if payment_value_col else 0.0
+        delivery_value = _float_value(cell(row_index, delivery_value_col).value) if delivery_value_col else 0.0
+        payment_value = _float_value(cell(row_index, payment_value_col).value) if payment_value_col else 0.0
         total_delivery_value += delivery_value
         total_payment_value += payment_value
         rows.append(
             {
-                "brand_partner": _string_value(sheet.cell(row_index, header_map.get("brand partner", 1)).value),
+                "brand_partner": _string_value(cell(row_index, header_map.get("brand partner", 1)).value),
                 "sku": sku_name,
-                "vatable": _string_value(sheet.cell(row_index, header_map.get("vatable yes no", 1)).value),
+                "vatable": _string_value(cell(row_index, header_map.get("vatable yes no", 1)).value),
                 "retail_delivery_value": round(delivery_value, 2),
                 "payment_collection_value": round(payment_value, 2),
             }
@@ -1629,9 +1639,11 @@ def _parse_fee_sheet(sheet: Any) -> dict[str, Any]:
 
 
 def _parse_load_list_sheet(sheet: Any) -> tuple[list[dict[str, Any]], dict[str, float]]:
+    max_row, _ = _sheet_bounds(sheet)
+    cell = sheet.cell
     header_row_index = None
-    for row_index in range(1, min(sheet.max_row, 12) + 1):
-        if _normalize_text(sheet.cell(row_index, 1).value) == "sku":
+    for row_index in range(1, min(max_row, 12) + 1):
+        if _normalize_text(cell(row_index, 1).value) == "sku":
             header_row_index = row_index
             break
 
@@ -1640,15 +1652,15 @@ def _parse_load_list_sheet(sheet: Any) -> tuple[list[dict[str, Any]], dict[str, 
 
     rows = []
     totals = {"load_1": 0.0, "load_2": 0.0, "load_3": 0.0, "load_4": 0.0, "total": 0.0}
-    for row_index in range(header_row_index + 1, sheet.max_row + 1):
-        sku_name = _string_value(sheet.cell(row_index, 1).value)
+    for row_index in range(header_row_index + 1, max_row + 1):
+        sku_name = _string_value(cell(row_index, 1).value)
         if not sku_name:
             continue
-        load_1 = _float_value(sheet.cell(row_index, 2).value)
-        load_2 = _float_value(sheet.cell(row_index, 3).value)
-        load_3 = _float_value(sheet.cell(row_index, 4).value)
-        load_4 = _float_value(sheet.cell(row_index, 5).value)
-        total = _float_value(sheet.cell(row_index, 6).value)
+        load_1 = _float_value(cell(row_index, 2).value)
+        load_2 = _float_value(cell(row_index, 3).value)
+        load_3 = _float_value(cell(row_index, 4).value)
+        load_4 = _float_value(cell(row_index, 5).value)
+        total = _float_value(cell(row_index, 6).value)
         if total <= 0 and load_1 <= 0 and load_2 <= 0 and load_3 <= 0 and load_4 <= 0:
             continue
         totals["load_1"] += load_1
@@ -1678,11 +1690,13 @@ def _resolve_fee_sheet(workbook: Any):
 
 
 def _locate_day_grid(sheet: Any) -> dict[str, Any]:
+    max_row, max_column = _sheet_bounds(sheet)
+    cell = sheet.cell
     header_row_index = None
     store_col = None
-    for row_index in range(1, min(sheet.max_row, 50) + 1):
-        for column_index in range(1, min(sheet.max_column, 30) + 1):
-            if _normalize_text(sheet.cell(row_index, column_index).value) == "load for external delivery":
+    for row_index in range(1, min(max_row, 50) + 1):
+        for column_index in range(1, min(max_column, 30) + 1):
+            if _normalize_text(cell(row_index, column_index).value) == "load for external delivery":
                 header_row_index = row_index
                 store_col = column_index
                 break
@@ -1698,13 +1712,15 @@ def _locate_day_grid(sheet: Any) -> dict[str, Any]:
 
 
 def _locate_support_grid(sheet: Any) -> dict[str, Any]:
+    _, max_column = _sheet_bounds(sheet)
+    cell = sheet.cell
     try:
         return _locate_day_grid(sheet)
     except LoadingTrackerError:
         product_header_row = _find_row_index(sheet, "PRODUCTS DESCRIPTIONS") or 2
         product_headers = []
-        for column_index in range(10, sheet.max_column + 1):
-            sku_name = _string_value(sheet.cell(product_header_row, column_index).value)
+        for column_index in range(10, max_column + 1):
+            sku_name = _string_value(cell(product_header_row, column_index).value)
             if sku_name:
                 product_headers.append((column_index, sku_name))
         return {
@@ -1722,13 +1738,15 @@ def _locate_support_grid(sheet: Any) -> dict[str, Any]:
 
 
 def _build_grid_definition(sheet: Any, header_row_index: int, store_col: int) -> dict[str, Any]:
+    _, max_column = _sheet_bounds(sheet)
+    cell = sheet.cell
     header_values = {
-        _normalize_text(sheet.cell(header_row_index, column_index).value): column_index
-        for column_index in range(1, min(sheet.max_column, store_col + 20) + 1)
+        _normalize_text(cell(header_row_index, column_index).value): column_index
+        for column_index in range(1, min(max_column, store_col + 20) + 1)
     }
     product_headers = []
-    for column_index in range(store_col + 1, sheet.max_column + 1):
-        sku_name = _string_value(sheet.cell(header_row_index, column_index).value)
+    for column_index in range(store_col + 1, max_column + 1):
+        sku_name = _string_value(cell(header_row_index, column_index).value)
         if sku_name:
             product_headers.append((column_index, sku_name))
 
@@ -1747,18 +1765,22 @@ def _build_grid_definition(sheet: Any, header_row_index: int, store_col: int) ->
 
 
 def _find_row_index(sheet: Any, label: str) -> int | None:
+    max_row, max_column = _sheet_bounds(sheet)
+    cell = sheet.cell
     target = _normalize_text(label)
-    for row_index in range(1, min(sheet.max_row, 40) + 1):
-        for column_index in range(1, min(sheet.max_column, 12) + 1):
-            if _normalize_text(sheet.cell(row_index, column_index).value) == target:
+    for row_index in range(1, min(max_row, 40) + 1):
+        for column_index in range(1, min(max_column, 12) + 1):
+            if _normalize_text(cell(row_index, column_index).value) == target:
                 return row_index
     return None
 
 
 def _count_note_lines(sheet: Any) -> int:
+    max_row, max_column = _sheet_bounds(sheet)
+    cell = sheet.cell
     count = 0
-    for row_index in range(1, sheet.max_row + 1):
-        values = [_string_value(sheet.cell(row_index, column_index).value) for column_index in range(1, sheet.max_column + 1)]
+    for row_index in range(1, max_row + 1):
+        values = [_string_value(cell(row_index, column_index).value) for column_index in range(1, max_column + 1)]
         if any(values):
             count += 1
     return count
@@ -1781,9 +1803,17 @@ def _load_workbook_from_upload(file_storage: Any):
     payload = file_storage.read()
     file_storage.stream.seek(0)
     try:
-        return load_workbook(BytesIO(payload), data_only=True)
+        return load_workbook(BytesIO(payload), data_only=True, keep_links=False)
     except Exception as exc:  # pragma: no cover
         raise LoadingTrackerError("The uploaded file could not be read as an Excel workbook.") from exc
+
+
+def _sheet_bounds(sheet: Any) -> tuple[int, int]:
+    bounds = getattr(sheet, "_dala_bounds", None)
+    if bounds is None:
+        bounds = (sheet.max_row, sheet.max_column)
+        setattr(sheet, "_dala_bounds", bounds)
+    return bounds
 
 
 def _string_value(value: Any) -> str:
