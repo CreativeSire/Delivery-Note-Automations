@@ -7,7 +7,17 @@ from tempfile import TemporaryDirectory
 from openpyxl import Workbook
 
 from app import _database_uri, create_app
-from models import LoadingTrackerDay, LoadingTrackerImport, LoadingTrackerRow, Product, ProductAlias, UploadRun, db
+from models import (
+    LoadingTrackerDailyCount,
+    LoadingTrackerDay,
+    LoadingTrackerEvent,
+    LoadingTrackerImport,
+    LoadingTrackerRow,
+    Product,
+    ProductAlias,
+    UploadRun,
+    db,
+)
 from services import bootstrap_seed_uom_if_empty
 
 
@@ -198,6 +208,19 @@ def build_loading_tracker_workbook() -> BytesIO:
     notes.append(["Line 1"])
     notes.append(["Line 2"])
 
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    return stream
+
+
+def build_loading_tracker_uom_workbook() -> BytesIO:
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = "UOM"
+    ws.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
+    ws.append(["SKU Alpha", "ctn", "unt", 12, "No", 100])
+    ws.append(["SKU Beta", "ctn", "unt", 12, "No", 80])
     stream = BytesIO()
     workbook.save(stream)
     stream.seek(0)
@@ -823,5 +846,127 @@ def test_loading_tracker_live_move_and_inventory_adjustment() -> None:
             sku_alpha = next(item for item in tracker_import.inventory_items if item.sku_name == "SKU Alpha")
             assert pending_count == 0
             assert float(sku_alpha.added_qty) == 3.0
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_loading_tracker_counts_handoff_history_and_carry_forward() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(build_loading_tracker_uom_workbook().getvalue()), "uom.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        response = client.post(
+            "/loading-tracker/import",
+            data={"loading_tracker_workbook": (BytesIO(build_loading_tracker_workbook().getvalue()), "Week 4 Loading Tracker.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        with app.app_context():
+            tracker_import = db.session.query(LoadingTrackerImport).one()
+            mon = db.session.query(LoadingTrackerDay).filter_by(day_name="Mon").one()
+            mon_first_row = (
+                db.session.query(LoadingTrackerRow)
+                .filter_by(day_id=mon.id, row_state="planned")
+                .order_by(LoadingTrackerRow.sort_order.asc())
+                .first()
+            )
+            assert mon_first_row is not None
+            import_id = tracker_import.id
+            row_id = mon_first_row.id
+
+        counts = client.post(
+            f"/loading-tracker/imports/{import_id}/days/Mon/counts",
+            data={"count::SKU Alpha": "9", "count::SKU Beta": "3.5"},
+            follow_redirects=True,
+        )
+        counts_html = counts.get_data(as_text=True)
+        assert counts.status_code == 200
+        assert "Start-of-day physical count saved for Mon" in counts_html
+        assert "Count status" in counts_html
+
+        with app.app_context():
+            assert db.session.query(LoadingTrackerDailyCount).filter_by(day_id=mon.id).count() == 2
+
+        invalid_pending = client.post(
+            f"/loading-tracker/imports/{import_id}/rows/{row_id}/move",
+            data={"target_day_name": "__pending__"},
+            follow_redirects=True,
+        )
+        invalid_html = invalid_pending.get_data(as_text=True)
+        assert invalid_pending.status_code == 200
+        assert "Choose a pending reason" in invalid_html
+
+        valid_pending = client.post(
+            f"/loading-tracker/imports/{import_id}/rows/{row_id}/move",
+            data={
+                "target_day_name": "__pending__",
+                "reason_code": "stock_shortage",
+                "reason_note": "SKU Alpha short",
+            },
+            follow_redirects=True,
+        )
+        valid_pending_html = valid_pending.get_data(as_text=True)
+        assert valid_pending.status_code == 200
+        assert "now waiting in Pending" in valid_pending_html
+        assert "Insufficient stock: SKU Alpha short" in valid_pending_html
+
+        tues_day = client.get(f"/loading-tracker/imports/{import_id}/days/Tues")
+        tues_html = tues_day.get_data(as_text=True)
+        assert tues_day.status_code == 200
+        assert "Pack Breaker" in tues_html
+        assert "SKU Beta" in tues_html
+
+        handoff = client.post(
+            f"/loading-tracker/imports/{import_id}/days/Tues/handoff",
+            follow_redirects=True,
+        )
+        handoff_html = handoff.get_data(as_text=True)
+        assert handoff.status_code == 200
+        assert "final adjusted day plan has been handed off" in handoff_html
+        assert "Download XLS" in handoff_html
+
+        history = client.get(f"/loading-tracker/imports/{import_id}/history")
+        history_html = history.get_data(as_text=True)
+        assert history.status_code == 200
+        assert "Track planning changes" in history_html
+        assert "Insufficient stock" in history_html
+
+        history_download = client.get(f"/loading-tracker/imports/{import_id}/history/download")
+        assert history_download.status_code == 200
+        assert history_download.mimetype == "text/csv"
+        assert b"moved_to_pending" in history_download.data
+
+        carry = client.post(
+            f"/loading-tracker/imports/{import_id}/carry-forward",
+            follow_redirects=True,
+        )
+        carry_html = carry.get_data(as_text=True)
+        assert carry.status_code == 200
+        assert "fresh week was created" in carry_html
+
+        with app.app_context():
+            imports = db.session.query(LoadingTrackerImport).order_by(LoadingTrackerImport.created_at.asc()).all()
+            assert len(imports) == 2
+            latest_import = imports[-1]
+            assert len(latest_import.days) == 6
+            assert db.session.query(LoadingTrackerRow).filter_by(tracker_import_id=latest_import.id, row_state="pending").count() == 2
+            assert float(latest_import.opening_g2g_total) == 7.0
+            assert db.session.query(LoadingTrackerEvent).filter_by(tracker_import_id=latest_import.id).count() >= 1
+            assert db.session.query(UploadRun).count() == 1
             db.session.remove()
             db.engine.dispose()

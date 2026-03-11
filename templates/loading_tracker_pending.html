@@ -22,6 +22,7 @@
     <a class="tracker-day-link is-active" href="{{ url_for('loading_tracker_pending_view', import_id=tracker_import.id) }}">Pending</a>
     <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_inventory_view', import_id=tracker_import.id) }}">G2G</a>
     <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_fees_view', import_id=tracker_import.id) }}">Fees</a>
+    <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_history_view', import_id=tracker_import.id) }}">History</a>
   </nav>
 
   <section class="stat-row">
@@ -97,10 +98,20 @@
     <article class="glass-card">
       <div class="module-head compact">
         <div>
-          <p class="eyebrow">Pressure view</p>
-          <h2>Pending SKU build-up</h2>
+          <p class="eyebrow">Reasons and pressure</p>
+          <h2>Pending analytics snapshot</h2>
         </div>
       </div>
+      {% if pending_context.reason_breakdown %}
+        <div class="warning-stack">
+          {% for reason in pending_context.reason_breakdown %}
+            <div class="warning-row">
+              <span>{{ reason.reason }}</span>
+              <strong>{{ reason.count }}</strong>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
       {% if pending_context.top_products %}
         <div class="data-table">
           <div class="table-line table-head-line two-col-line">

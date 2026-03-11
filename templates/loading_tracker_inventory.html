@@ -17,6 +17,7 @@
     <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_pending_view', import_id=tracker_import.id) }}">Pending</a>
     <a class="tracker-day-link is-active" href="{{ url_for('loading_tracker_inventory_view', import_id=tracker_import.id) }}">G2G</a>
     <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_fees_view', import_id=tracker_import.id) }}">Fees</a>
+    <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_history_view', import_id=tracker_import.id) }}">History</a>
   </nav>
 
   <section class="stat-row">
@@ -46,8 +47,8 @@
     <article class="glass-card inventory-form-card">
       <div class="module-head compact">
         <div>
-          <p class="eyebrow">Adjustment</p>
-          <h2>Update live stock</h2>
+          <p class="eyebrow">Baseline</p>
+          <h2>Update live stock model</h2>
         </div>
       </div>
       <form class="form-stack" action="{{ url_for('loading_tracker_inventory_update', import_id=tracker_import.id) }}" method="post">
@@ -78,32 +79,50 @@
     <article class="glass-card">
       <div class="module-head compact">
         <div>
-          <p class="eyebrow">Live table</p>
-          <h2>Inventory by SKU</h2>
+          <p class="eyebrow">Daily count status</p>
+          <h2>Start-of-day capture by day</h2>
         </div>
       </div>
-      {% if inventory_context.rows %}
-        <div class="data-table">
-          <div class="table-line inventory-line table-head-line">
-            <span>SKU</span>
-            <span>Opening</span>
-            <span>Added</span>
-            <span>Planned</span>
-            <span>Remaining</span>
+      <div class="warning-stack">
+        {% for day in inventory_context.day_count_status %}
+          <div class="warning-row">
+            <span>{{ day.day_name }}</span>
+            <strong>{{ "Captured" if day.captured else "Pending" }}</strong>
+            <small>{{ day.discrepancy_total }}</small>
           </div>
-          {% for row in inventory_context.rows %}
-            <div class="table-line inventory-line">
-              <span>{{ row.sku }}</span>
-              <span>{{ row.opening_g2g_qty }}</span>
-              <span>{{ row.added_qty }}</span>
-              <span>{{ row.planned_qty }}</span>
-              <span><span class="status-pill status-{{ row.status }}">{{ row.remaining_qty }}</span></span>
-            </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <p class="empty-state">No live G2G rows yet.</p>
-      {% endif %}
+        {% endfor %}
+      </div>
     </article>
+  </section>
+
+  <section class="glass-card">
+    <div class="module-head compact">
+      <div>
+        <p class="eyebrow">Live table</p>
+        <h2>Inventory by SKU</h2>
+      </div>
+    </div>
+    {% if inventory_context.rows %}
+      <div class="data-table">
+        <div class="table-line inventory-line table-head-line">
+          <span>SKU</span>
+          <span>Opening</span>
+          <span>Added</span>
+          <span>Planned</span>
+          <span>Remaining</span>
+        </div>
+        {% for row in inventory_context.rows %}
+          <div class="table-line inventory-line">
+            <span>{{ row.sku }}</span>
+            <span>{{ row.opening_g2g_qty }}</span>
+            <span>{{ row.added_qty }}</span>
+            <span>{{ row.planned_qty }}</span>
+            <span><span class="status-pill status-{{ row.status }}">{{ row.remaining_qty }}</span></span>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">No live G2G rows yet.</p>
+    {% endif %}
   </section>
 {% endblock %}

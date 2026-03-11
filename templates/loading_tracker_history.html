@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}Loading Tracker History | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="hero-band">
+    <div>
+      <p class="eyebrow">Loading Tracker · History</p>
+      <h1>Track planning changes, pending reasons, counts, and handoffs.</h1>
+      <p class="page-copy">This gives you the audit trail for what changed, why it changed, and what was sent downstream.</p>
+    </div>
+    <div class="actions">
+      <a class="secondary-button" href="{{ url_for('loading_tracker_import_view', import_id=tracker_import.id) }}">Back to week</a>
+      <a class="primary-button" href="{{ url_for('loading_tracker_history_download', import_id=tracker_import.id) }}">Download CSV</a>
+    </div>
+  </section>
+
+  <section class="stat-row">
+    <article class="glass-card stat-card">
+      <span class="panel-label">Logged events</span>
+      <strong>{{ history_context.event_count }}</strong>
+      <small>captured in this week</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Pending reasons</span>
+      <strong>{{ history_context.reason_counts|length }}</strong>
+      <small>grouped reasons on record</small>
+    </article>
+  </section>
+
+  <section class="content-split">
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Reason analytics</p>
+          <h2>Most common holds</h2>
+        </div>
+      </div>
+      {% if history_context.reason_counts %}
+        <div class="warning-stack">
+          {% for item in history_context.reason_counts %}
+            <div class="warning-row">
+              <span>{{ item.reason }}</span>
+              <strong>{{ item.count }}</strong>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">Pending reason analytics will appear here once the team starts holding lines.</p>
+      {% endif %}
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Audit trail</p>
+          <h2>Recent events</h2>
+        </div>
+      </div>
+      {% if history_context.events %}
+        <div class="data-table">
+          <div class="table-line table-head-line history-line">
+            <span>When</span>
+            <span>Event</span>
+            <span>Day</span>
+            <span>Entity</span>
+            <span>Reason</span>
+          </div>
+          {% for event in history_context.events[:80] %}
+            <div class="table-line history-line">
+              <span>{{ event.created_at.strftime('%Y-%m-%d %H:%M') if event.created_at else '' }}</span>
+              <span>{{ event.event_type }}</span>
+              <span>{{ event.day_name or '-' }}</span>
+              <span>{{ event.entity_name }}</span>
+              <span>{{ event.reason_text or '-' }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No history has been logged for this week yet.</p>
+      {% endif %}
+    </article>
+  </section>
+{% endblock %}

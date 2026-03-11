@@ -6,10 +6,19 @@
   <section class="hero-band">
     <div>
       <p class="eyebrow">Loading Tracker</p>
-      <h1>Editable day planning, generated pending, live G2G, and LL built from the plan.</h1>
-      <p class="page-copy">Import the weekly workbook once, then keep working inside the app instead of treating the workbook as the only place the process can live.</p>
+      <h1>Editable day planning, live counts, generated pending, LL, and Pack Breaker from one planning flow.</h1>
+      <p class="page-copy">Import the weekly workbook once, then keep planning inside the app. Start new weeks from carry-forward instead of depending on a fresh workbook every day.</p>
     </div>
-    <div class="hero-chip">{{ 'Live workflow' if tracker_import and overview.live_ready else 'Import workbook' }}</div>
+    <div class="actions">
+      {% if tracker_import %}
+        <a class="secondary-button" href="{{ url_for('loading_tracker_history_view', import_id=tracker_import.id) }}">Open history</a>
+        <form action="{{ url_for('loading_tracker_carry_forward', import_id=tracker_import.id) }}" method="post">
+          <button class="primary-button" type="submit">Start new week</button>
+        </form>
+      {% else %}
+        <div class="hero-chip">Import workbook</div>
+      {% endif %}
+    </div>
   </section>
 
   <section class="content-split content-split-hero">
@@ -55,6 +64,10 @@
           <div class="tracker-overview-row">
             <span class="metric-label">Live pending rows</span>
             <strong>{{ overview.total_pending_rows }}</strong>
+          </div>
+          <div class="tracker-overview-row">
+            <span class="metric-label">Live history</span>
+            <strong>{{ tracker_import.events|length }}</strong>
           </div>
           <div class="tracker-overview-row">
             <span class="metric-label">Largest day</span>
@@ -104,7 +117,13 @@
             <a class="day-stage" href="{{ url_for('loading_tracker_day_view', import_id=tracker_import.id, day_name=day.day_name) }}">
               <span class="day-stage-name">{{ day.day_name }}</span>
               <strong>{{ day.planning_rows|selectattr('row_state', 'equalto', 'planned')|list|length }} live rows</strong>
-              <small>Open and edit the day</small>
+              <small>
+                {% if day.inventory_counts %}
+                  Physical count captured
+                {% else %}
+                  Start-of-day count still needed
+                {% endif %}
+              </small>
             </a>
           {% endfor %}
         </div>
@@ -121,17 +140,22 @@
           <a class="future-card" href="{{ url_for('loading_tracker_pending_view', import_id=tracker_import.id) }}">
             <span class="panel-label">Pending</span>
             <strong>{{ overview.total_pending_rows }} rows waiting</strong>
-            <small>Move them into a day when the plan is ready.</small>
+            <small>Every pending move now keeps a reason for analytics and learning.</small>
           </a>
           <a class="future-card" href="{{ url_for('loading_tracker_inventory_view', import_id=tracker_import.id) }}">
             <span class="panel-label">G2G</span>
             <strong>{{ '{:,.2f}'.format(tracker_import.opening_g2g_total or 0) }} opening</strong>
-            <small>Adjust live stock and let remaining quantities update automatically.</small>
+            <small>Physical counts drive each day, while the live stock view keeps the weekly picture visible.</small>
           </a>
           <a class="future-card" href="{{ url_for('loading_tracker_fees_view', import_id=tracker_import.id) }}">
             <span class="panel-label">BP New Fees</span>
             <strong>{{ tracker_import.fees_row_count }} fee rows</strong>
             <small>Keep load value control visible beside planning.</small>
+          </a>
+          <a class="future-card" href="{{ url_for('loading_tracker_history_view', import_id=tracker_import.id) }}">
+            <span class="panel-label">History</span>
+            <strong>{{ tracker_import.events|length }} logged events</strong>
+            <small>Download changes, pending reasons, counts, and handoff activity.</small>
           </a>
         </div>
       </article>

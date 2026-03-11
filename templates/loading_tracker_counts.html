@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}{{ day.day_name }} Counts | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="hero-band">
+    <div>
+      <p class="eyebrow">Loading Tracker · {{ day.day_name }} count</p>
+      <h1>Capture the physical inventory before planning moves further.</h1>
+      <p class="page-copy">This is the count the team trusts for the day. The planner uses it to flag gaps between expected stock and what is physically available.</p>
+    </div>
+    <div class="actions">
+      <a class="secondary-button" href="{{ url_for('loading_tracker_day_view', import_id=tracker_import.id, day_name=day.day_name) }}">Back to {{ day.day_name }}</a>
+    </div>
+  </section>
+
+  <section class="stat-row">
+    <article class="glass-card stat-card">
+      <span class="panel-label">Expected total</span>
+      <strong>{{ '{:,.2f}'.format(count_context.expected_total) }}</strong>
+      <small>system expectation before count</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Physical total</span>
+      <strong>{{ '{:,.2f}'.format(count_context.physical_total) }}</strong>
+      <small>what the team counted</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Net gap</span>
+      <strong>{{ '{:,.2f}'.format(count_context.discrepancy_total) }}</strong>
+      <small>physical minus expected</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Variance rows</span>
+      <strong>{{ count_context.variance_rows }}</strong>
+      <small>SKUs with differences</small>
+    </article>
+  </section>
+
+  <section class="glass-card">
+    <div class="module-head compact">
+      <div>
+        <p class="eyebrow">Count sheet</p>
+        <h2>Start-of-day physical inventory</h2>
+      </div>
+    </div>
+    <form class="form-stack" action="{{ url_for('loading_tracker_day_counts_save', import_id=tracker_import.id, day_name=day.day_name) }}" method="post">
+      <div class="data-table">
+        <div class="table-line table-head-line count-entry-line">
+          <span>SKU</span>
+          <span>Expected</span>
+          <span>Physical count</span>
+          <span>Gap</span>
+        </div>
+        {% for row in count_context.rows %}
+          <div class="table-line count-entry-line">
+            <span>{{ row.sku }}</span>
+            <span>{{ row.expected_qty }}</span>
+            <span>
+              <input class="count-input" name="count::{{ row.sku }}" type="number" step="0.25" value="{{ row.physical_qty }}">
+            </span>
+            <span><span class="status-pill status-{{ row.status }}">{{ row.discrepancy_qty }}</span></span>
+          </div>
+        {% endfor %}
+      </div>
+      <button class="primary-button" type="submit">Save start-of-day count</button>
+    </form>
+  </section>
+{% endblock %}

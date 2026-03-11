@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from pathlib import Path
@@ -12,13 +14,20 @@ from sqlalchemy import func, select
 
 from models import (
     LoadingTrackerDay,
+    LoadingTrackerDailyCount,
+    LoadingTrackerEvent,
     LoadingTrackerFeeItem,
     LoadingTrackerImport,
     LoadingTrackerInventoryItem,
     LoadingTrackerRow,
     LoadingTrackerRowItem,
+    Product,
+    ProductAlias,
+    UploadLine,
+    UploadRun,
     db,
 )
+from services import DATE_FORMAT, apply_product_to_line, resolve_product_match, tomorrow_in_timezone
 
 DAY_SHEET_NAMES = ["Mon", "Tues", "Wed", "Thurs", "Fri", "Sat"]
 LL_SHEET_MAP = {
@@ -40,6 +49,15 @@ PENDING_STATE = "pending"
 PENDING_SENTINEL = "__pending__"
 INVALID_FILENAME_CHARS = r'[<>:"/\\|?*\x00-\x1f]'
 DEFAULT_BATCHES = ["Load 1", "Load 2", "Load 3", "Load 4", "Unassigned"]
+PENDING_REASON_OPTIONS = [
+    {"code": "stock_shortage", "label": "Insufficient stock"},
+    {"code": "receiving_day", "label": "Store does not receive today"},
+    {"code": "credit_hold", "label": "Credit or payment concern"},
+    {"code": "store_hold", "label": "Store asked us to wait"},
+    {"code": "route_priority", "label": "Route or load priority decision"},
+    {"code": "manual_hold", "label": "Manual operations hold"},
+]
+PENDING_REASON_LABELS = {item["code"]: item["label"] for item in PENDING_REASON_OPTIONS}
 
 
 class LoadingTrackerError(Exception):
@@ -55,6 +73,10 @@ class LoadingTrackerSummary:
     total_active_stores: int
     total_pending_stores: int
     total_fee_rows: int
+
+
+def get_pending_reason_options() -> list[dict[str, str]]:
+    return list(PENDING_REASON_OPTIONS)
 
 
 def build_loading_tracker_summary() -> LoadingTrackerSummary:
@@ -217,6 +239,18 @@ def import_loading_tracker_workbook(file_storage: Any) -> LoadingTrackerImport:
                 source_kind="import",
             )
 
+    _log_tracker_event(
+        tracker_import=tracker_import,
+        day=None,
+        row=None,
+        event_type="imported_weekly_tracker",
+        entity_name=tracker_import.week_label,
+        details={
+            "filename": tracker_import.filename,
+            "day_count": len(tracker_import.days),
+            "pending_rows": len([row for row in tracker_import.planning_rows if row.row_state == PENDING_STATE]),
+        },
+    )
     db.session.commit()
     return tracker_import
 
@@ -285,15 +319,15 @@ def build_loading_tracker_day_context(day: LoadingTrackerDay) -> dict[str, Any]:
     planned_rows = [row for row in day.planning_rows if row.row_state == PLANNED_STATE]
     serialized_rows = [_serialize_row(row) for row in planned_rows]
     grouped_batches = group_store_rows_by_batch(serialized_rows)
-
-    inventory_totals = _inventory_totals_by_sku(tracker_import)
-    previous_days = [item for item in tracker_import.days if item.day_order < day.day_order]
-    consumed_before = _aggregate_row_item_totals(_rows_for_days(previous_days))
+    expected_start = _expected_start_by_day(tracker_import, day)
+    for sku_name in _aggregate_row_item_totals(planned_rows):
+        expected_start.setdefault(sku_name, 0.0)
+    count_lookup, discrepancy_rows, count_ready = _day_count_snapshot(day, expected_start)
+    available_start = count_lookup if count_ready else expected_start
     consumed_today = _aggregate_row_item_totals(planned_rows)
-
-    available_start = _subtract_maps(inventory_totals, consumed_before)
     remaining_after = _subtract_maps(available_start, consumed_today)
     ll_rows, load_totals = _build_ll_rows(serialized_rows)
+    pack_breaker_rows, pack_breaker_batches = _build_pack_breaker_rows(serialized_rows)
     top_products = _sorted_top_products(consumed_today, 12)
     inventory_warnings = [
         {"sku": sku, "remaining": round(quantity, 2)}
@@ -326,8 +360,14 @@ def build_loading_tracker_day_context(day: LoadingTrackerDay) -> dict[str, Any]:
         "rows": serialized_rows,
         "grouped_batches": grouped_batches,
         "ll_rows": ll_rows,
+        "pack_breaker_rows": pack_breaker_rows,
+        "pack_breaker_batches": pack_breaker_batches,
         "top_products": top_products,
         "inventory_warnings": inventory_warnings,
+        "count_rows": discrepancy_rows,
+        "count_ready": count_ready,
+        "count_discrepancy_total": round(sum(abs(row["discrepancy_qty"]) for row in discrepancy_rows), 2),
+        "count_discrepancy_rows": len([row for row in discrepancy_rows if abs(row["discrepancy_qty"]) > 0.0001]),
         "day_options": [{"value": item.day_name, "label": item.day_name} for item in tracker_import.days],
     }
 
@@ -337,14 +377,20 @@ def build_loading_tracker_pending_context(tracker_import: LoadingTrackerImport) 
     serialized_rows = [_serialize_row(row) for row in pending_rows]
     grouped_batches = group_store_rows_by_batch(serialized_rows)
     top_products = _sorted_top_products(_aggregate_row_item_totals(pending_rows), 12)
+    reasons: dict[str, int] = {}
+    for row in pending_rows:
+        key = row.reason_text or "Waiting for planning decision"
+        reasons[key] = reasons.get(key, 0) + 1
     return {
         "rows": serialized_rows,
         "grouped_batches": grouped_batches,
         "top_products": top_products,
+        "reason_breakdown": [{"reason": reason, "count": count} for reason, count in sorted(reasons.items(), key=lambda item: (-item[1], item[0]))],
         "total_rows": len(serialized_rows),
         "total_quantity": round(sum(row["total_quantity"] for row in serialized_rows), 2),
         "total_value": round(sum(row["value"] for row in serialized_rows), 2),
         "day_options": [{"value": item.day_name, "label": item.day_name} for item in tracker_import.days],
+        "reason_options": get_pending_reason_options(),
     }
 
 
@@ -354,13 +400,25 @@ def build_loading_tracker_inventory_context(tracker_import: LoadingTrackerImport
     planned_totals = _aggregate_row_item_totals(_rows_for_days(tracker_import.days))
     all_skus = sorted(set(inventory_totals) | set(planned_totals))
     inventory_lookup = {item.sku_name: item for item in tracker_import.inventory_items}
+    closing_inventory = _closing_inventory_by_import(tracker_import)
+    day_count_status = [
+        {
+            "day_name": day.day_name,
+            "captured": bool(day.inventory_counts),
+            "discrepancy_total": round(
+                sum(abs(_float_value(item.discrepancy_qty)) for item in day.inventory_counts),
+                2,
+            ),
+        }
+        for day in tracker_import.days
+    ]
 
     for sku in all_skus:
         record = inventory_lookup.get(sku)
         opening = _float_value(record.opening_g2g_qty) if record else 0.0
         added = _float_value(record.added_qty) if record else 0.0
         planned = round(planned_totals.get(sku, 0.0), 2)
-        remaining = round(opening + added - planned, 2)
+        remaining = round(closing_inventory.get(sku, opening + added - planned), 2)
         inventory_rows.append(
             {
                 "id": record.id if record else None,
@@ -381,6 +439,7 @@ def build_loading_tracker_inventory_context(tracker_import: LoadingTrackerImport
         "planned_total": round(sum(row["planned_qty"] for row in inventory_rows), 2),
         "remaining_total": round(sum(row["remaining_qty"] for row in inventory_rows), 2),
         "tight_count": len([row for row in inventory_rows if row["remaining_qty"] <= 0]),
+        "day_count_status": day_count_status,
     }
 
 
@@ -422,6 +481,7 @@ def build_loading_tracker_row_editor(
         + [{"value": PENDING_SENTINEL, "label": "Pending"}],
         "batch_options": DEFAULT_BATCHES,
         "items_text": _row_items_text(row) if row is not None else "",
+        "reason_options": get_pending_reason_options(),
     }
 
 
@@ -447,6 +507,8 @@ def save_loading_tracker_row(
         raise LoadingTrackerError("Add at least one SKU quantity in the planner.")
 
     selected_day_name = _string_value(form_data.get("target_day_name")) or PENDING_SENTINEL
+    reason_code = _string_value(form_data.get("reason_code"))
+    reason_note = _string_value(form_data.get("reason_note"))
     day = None
     row_state = PENDING_STATE
     if selected_day_name != PENDING_SENTINEL:
@@ -454,10 +516,13 @@ def save_loading_tracker_row(
         if day is None:
             raise LoadingTrackerError("The selected planning day could not be found.")
         row_state = PLANNED_STATE
+    elif not reason_code and not (row is not None and row.reason_text):
+        raise LoadingTrackerError("Choose a pending reason before sending a line out of today's plan.")
 
     if row is None:
         row = LoadingTrackerRow(tracker_import_id=tracker_import_id, source_kind="manual")
         db.session.add(row)
+        db.session.flush()
 
     row.day_id = day.id if day is not None else None
     row.row_state = row_state
@@ -468,7 +533,10 @@ def save_loading_tracker_row(
     row.tier = _string_value(form_data.get("tier")) or None
     row.region = _string_value(form_data.get("region")) or None
     row.delivery_date = _string_value(form_data.get("delivery_date")) or None
-    row.reason_text = _string_value(form_data.get("reason_text")) or None
+    if row_state == PENDING_STATE:
+        row.reason_text = _compose_pending_reason(reason_code, reason_note) or row.reason_text
+    else:
+        row.reason_text = None
     row.total_weight = _decimal_value(form_data.get("total_weight"))
     row.total_value = _decimal_value(form_data.get("total_value"))
     row.sort_order = _next_sort_order(tracker_import, day, row_state, row.id)
@@ -482,6 +550,22 @@ def save_loading_tracker_row(
             )
         )
 
+    db.session.flush()
+    _log_tracker_event(
+        tracker_import=tracker_import,
+        day=day,
+        row=row,
+        event_type="planner_row_saved",
+        entity_name=row.store_name,
+        reason_code=reason_code or None,
+        reason_text=row.reason_text,
+        details={
+            "row_state": row.row_state,
+            "batch_name": row.batch_name,
+            "product_count": len(items),
+            "target_day_name": day.day_name if day is not None else PENDING_SENTINEL,
+        },
+    )
     db.session.commit()
     return row
 
@@ -490,17 +574,31 @@ def move_loading_tracker_row(
     tracker_import_id: str,
     row_id: int,
     target_day_name: str,
-    reason_text: str | None = None,
+    reason_code: str | None = None,
+    reason_note: str | None = None,
 ) -> LoadingTrackerRow:
     row = get_loading_tracker_row(row_id)
     if row is None or row.tracker_import_id != tracker_import_id:
         raise LoadingTrackerError("The planning row could not be found.")
+    previous_day_name = row.day.day_name if row.day is not None else None
 
     if target_day_name == PENDING_SENTINEL:
+        if not reason_code:
+            raise LoadingTrackerError("Choose a pending reason before moving a line into Pending.")
         row.day_id = None
         row.row_state = PENDING_STATE
-        row.reason_text = reason_text or row.reason_text or "Held for later planning"
+        row.reason_text = _compose_pending_reason(reason_code, reason_note)
         row.sort_order = _next_sort_order(row.tracker_import, None, PENDING_STATE, row.id)
+        _log_tracker_event(
+            tracker_import=row.tracker_import,
+            day=None,
+            row=row,
+            event_type="moved_to_pending",
+            entity_name=row.store_name,
+            reason_code=reason_code,
+            reason_text=row.reason_text,
+            details={"from_day": previous_day_name},
+        )
     else:
         day = get_loading_tracker_day(tracker_import_id, target_day_name)
         if day is None:
@@ -509,6 +607,14 @@ def move_loading_tracker_row(
         row.row_state = PLANNED_STATE
         row.reason_text = None
         row.sort_order = _next_sort_order(row.tracker_import, day, PLANNED_STATE, row.id)
+        _log_tracker_event(
+            tracker_import=row.tracker_import,
+            day=day,
+            row=row,
+            event_type="moved_into_day",
+            entity_name=row.store_name,
+            details={"from_day": previous_day_name, "to_day": day.day_name},
+        )
 
     db.session.commit()
     return row
@@ -539,8 +645,304 @@ def save_inventory_adjustment(tracker_import_id: str, form_data: dict[str, Any])
     item.opening_remaining_qty = opening_remaining or Decimal("0")
     item.added_qty = added_qty or Decimal("0")
 
+    _log_tracker_event(
+        tracker_import=tracker_import,
+        day=None,
+        row=None,
+        event_type="inventory_adjusted",
+        entity_name=item.sku_name,
+        details={
+            "opening_g2g_qty": _float_value(item.opening_g2g_qty),
+            "opening_remaining_qty": _float_value(item.opening_remaining_qty),
+            "added_qty": _float_value(item.added_qty),
+        },
+    )
     db.session.commit()
     return item
+
+
+def build_loading_tracker_count_context(day: LoadingTrackerDay) -> dict[str, Any]:
+    expected_start = _expected_start_by_day(day.tracker_import, day)
+    for sku_name in _aggregate_row_item_totals([row for row in day.planning_rows if row.row_state == PLANNED_STATE]):
+        expected_start.setdefault(sku_name, 0.0)
+    count_lookup, discrepancy_rows, count_ready = _day_count_snapshot(day, expected_start)
+    rows = []
+    for row in discrepancy_rows:
+        rows.append(
+            {
+                "sku": row["sku"],
+                "expected_qty": row["expected_qty"],
+                "physical_qty": row["physical_qty"],
+                "discrepancy_qty": row["discrepancy_qty"],
+                "status": row["status"],
+            }
+        )
+
+    return {
+        "rows": rows,
+        "count_ready": count_ready,
+        "expected_total": round(sum(item["expected_qty"] for item in rows), 2),
+        "physical_total": round(sum(item["physical_qty"] for item in rows), 2),
+        "discrepancy_total": round(sum(item["discrepancy_qty"] for item in rows), 2),
+        "variance_rows": len([item for item in rows if abs(item["discrepancy_qty"]) > 0.0001]),
+    }
+
+
+def save_loading_tracker_day_counts(import_id: str, day_name: str, form_data: dict[str, Any]) -> LoadingTrackerDay:
+    day = get_loading_tracker_day(import_id, day_name)
+    if day is None:
+        raise LoadingTrackerError("The selected planning day could not be found.")
+
+    expected_start = _expected_start_by_day(day.tracker_import, day)
+    incoming: dict[str, float] = {}
+    for key, value in form_data.items():
+        if not key.startswith("count::"):
+            continue
+        sku_name = key.split("count::", 1)[1]
+        incoming[sku_name] = _float_value(value)
+
+    if not incoming:
+        raise LoadingTrackerError("Enter the physical inventory count for the day before saving.")
+
+    existing = {item.sku_name: item for item in day.inventory_counts}
+    all_skus = sorted(set(expected_start) | set(incoming) | set(existing))
+    for sku_name in all_skus:
+        expected_qty = round(expected_start.get(sku_name, 0.0), 4)
+        physical_qty = round(incoming.get(sku_name, existing.get(sku_name).physical_qty if sku_name in existing else expected_qty), 4)
+        discrepancy_qty = round(physical_qty - expected_qty, 4)
+        record = existing.get(sku_name)
+        if record is None:
+            record = LoadingTrackerDailyCount(day_id=day.id, sku_name=sku_name)
+            db.session.add(record)
+        record.expected_qty = _decimal_or_none(expected_qty) or Decimal("0")
+        record.physical_qty = _decimal_or_none(physical_qty) or Decimal("0")
+        record.discrepancy_qty = _decimal_or_none(discrepancy_qty) or Decimal("0")
+
+    _log_tracker_event(
+        tracker_import=day.tracker_import,
+        day=day,
+        row=None,
+        event_type="captured_day_count",
+        entity_name=day.day_name,
+        details={
+            "sku_count": len(all_skus),
+            "variance_rows": len([sku for sku in all_skus if abs(incoming.get(sku, expected_start.get(sku, 0.0)) - expected_start.get(sku, 0.0)) > 0.0001]),
+        },
+    )
+    db.session.commit()
+    return day
+
+
+def build_loading_tracker_history_context(tracker_import: LoadingTrackerImport) -> dict[str, Any]:
+    events = []
+    reason_counts: dict[str, int] = {}
+    for event in tracker_import.events:
+        reason_text = event.reason_text or ""
+        if event.reason_code:
+            reason_counts[PENDING_REASON_LABELS.get(event.reason_code, event.reason_code)] = (
+                reason_counts.get(PENDING_REASON_LABELS.get(event.reason_code, event.reason_code), 0) + 1
+            )
+        events.append(
+            {
+                "created_at": event.created_at,
+                "event_type": event.event_type.replace("_", " "),
+                "entity_name": event.entity_name,
+                "day_name": event.day.day_name if event.day is not None else "",
+                "reason_text": reason_text,
+                "details": event.details_json or {},
+            }
+        )
+
+    return {
+        "events": events,
+        "event_count": len(events),
+        "reason_counts": [{"reason": reason, "count": count} for reason, count in sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))],
+    }
+
+
+def export_loading_tracker_history_csv(import_id: str) -> tuple[str, bytes]:
+    tracker_import = get_loading_tracker_import(import_id)
+    if tracker_import is None:
+        raise LoadingTrackerError("The selected loading tracker import could not be found.")
+
+    import io
+
+    buffer = BytesIO()
+    string_io = io.StringIO()
+    writer = csv.writer(string_io)
+    writer.writerow(["Created At", "Event Type", "Week", "Day", "Entity", "Reason", "Details"])
+    for event in tracker_import.events:
+        writer.writerow(
+            [
+                event.created_at.isoformat() if event.created_at else "",
+                event.event_type,
+                tracker_import.week_label,
+                event.day.day_name if event.day is not None else "",
+                event.entity_name,
+                event.reason_text or "",
+                event.details_json or {},
+            ]
+        )
+    buffer.write(string_io.getvalue().encode("utf-8"))
+    return f"{_clean_filename_part(tracker_import.week_label, 'loading-tracker-history')} - history.csv", buffer.getvalue()
+
+
+def carry_forward_loading_tracker_week(source_import_id: str | None = None) -> LoadingTrackerImport:
+    source_import = get_loading_tracker_import(source_import_id)
+    if source_import is None:
+        raise LoadingTrackerError("There is no loading tracker week to carry forward yet.")
+
+    remaining_map = _closing_inventory_by_import(source_import)
+    pending_rows = [row for row in source_import.planning_rows if row.row_state == PENDING_STATE]
+    carried_import = LoadingTrackerImport(
+        id=uuid4().hex,
+        filename=f"Carry Forward - {source_import.filename}",
+        week_label=f"Week of {datetime.now().date()}",
+        assumptions_sku_count=source_import.assumptions_sku_count,
+        assumptions_store_count=source_import.assumptions_store_count,
+        opening_g2g_total=_decimal_or_none(sum(remaining_map.values())),
+        opening_remaining_total=_decimal_or_none(sum(remaining_map.values())),
+        fees_row_count=source_import.fees_row_count,
+        fees_total_delivery_value=source_import.fees_total_delivery_value,
+        fees_total_payment_value=source_import.fees_total_payment_value,
+        notes_count=source_import.notes_count,
+    )
+    db.session.add(carried_import)
+    db.session.flush()
+
+    for order, day_name in enumerate(DAY_SHEET_NAMES, start=1):
+        db.session.add(
+            LoadingTrackerDay(
+                tracker_import_id=carried_import.id,
+                day_name=day_name,
+                day_order=order,
+            )
+        )
+
+    for sort_order, sku_name in enumerate(sorted(remaining_map), start=1):
+        qty = round(remaining_map.get(sku_name, 0.0), 4)
+        db.session.add(
+            LoadingTrackerInventoryItem(
+                tracker_import_id=carried_import.id,
+                sku_name=sku_name,
+                opening_g2g_qty=_decimal_or_none(qty) or Decimal("0"),
+                opening_remaining_qty=_decimal_or_none(qty) or Decimal("0"),
+                added_qty=Decimal("0"),
+                sort_order=sort_order,
+            )
+        )
+
+    for fee_item in source_import.fee_items:
+        db.session.add(
+            LoadingTrackerFeeItem(
+                tracker_import_id=carried_import.id,
+                brand_partner=fee_item.brand_partner,
+                sku_name=fee_item.sku_name,
+                vatable_text=fee_item.vatable_text,
+                retail_delivery_value=fee_item.retail_delivery_value,
+                payment_collection_value=fee_item.payment_collection_value,
+            )
+        )
+
+    for sort_order, row in enumerate(pending_rows, start=1):
+        row_data = _serialize_row(row)
+        _save_row_record(
+            tracker_import=carried_import,
+            row_data=row_data,
+            row_state=PENDING_STATE,
+            day=None,
+            sort_order=sort_order,
+            source_kind="carry-forward",
+            reason_text=row.reason_text or "Carried into the new week",
+        )
+
+    _log_tracker_event(
+        tracker_import=source_import,
+        day=None,
+        row=None,
+        event_type="carried_forward_week",
+        entity_name=source_import.week_label,
+        details={"next_week_id": carried_import.id},
+    )
+    _log_tracker_event(
+        tracker_import=carried_import,
+        day=None,
+        row=None,
+        event_type="created_from_carry_forward",
+        entity_name=carried_import.week_label,
+        details={"source_week_id": source_import.id, "pending_rows": len(pending_rows)},
+    )
+    db.session.commit()
+    return carried_import
+
+
+def create_delivery_note_run_from_loading_day(import_id: str, day_name: str, timezone_name: str) -> UploadRun:
+    day = get_loading_tracker_day(import_id, day_name)
+    if day is None:
+        raise LoadingTrackerError("The selected planning day could not be found.")
+
+    planned_rows = [row for row in day.planning_rows if row.row_state == PLANNED_STATE]
+    if not planned_rows:
+        raise LoadingTrackerError("This day has no planned rows to send into Delivery Note.")
+
+    products = list(db.session.scalars(select(Product)))
+    aliases = list(db.session.scalars(select(ProductAlias)))
+
+    run = UploadRun(
+        id=uuid4().hex,
+        original_filename=f"{day.tracker_import.week_label} - {day.day_name} adjusted plan",
+        invoice_date=tomorrow_in_timezone(timezone_name).strftime(DATE_FORMAT),
+        status="needs_review",
+        rows_detected=0,
+        rows_ready=0,
+        rows_needing_review=0,
+    )
+    db.session.add(run)
+    db.session.flush()
+
+    for row in planned_rows:
+        planning_ref = f"LT-{day.day_name.upper()}-{row.id:04d}"
+        for item in row.items:
+            quantity = item.quantity or Decimal("0")
+            if quantity <= 0:
+                continue
+            run.rows_detected += 1
+            line = UploadLine(
+                run_id=run.id,
+                order_number=planning_ref,
+                supermarket_name=row.store_name,
+                source_sku=item.sku_name,
+                normalized_source_sku=_normalize_text(item.sku_name).upper(),
+                quantity=quantity,
+            )
+            match = resolve_product_match(item.sku_name, products, aliases)
+            if match is None:
+                line.status = "needs_review"
+                run.rows_needing_review += 1
+            elif not match.product.is_active:
+                line.status = "ignored"
+                line.matched_by = "inactive"
+                line.product_id = match.product.id
+                line.resolved_sku_name = match.product.sku_name
+            elif match.product.price is None:
+                line.status = "needs_review"
+                run.rows_needing_review += 1
+            else:
+                apply_product_to_line(line, match.product, match.match_method)
+                run.rows_ready += 1
+            db.session.add(line)
+
+    run.status = "ready" if run.rows_needing_review == 0 else "needs_review"
+    _log_tracker_event(
+        tracker_import=day.tracker_import,
+        day=day,
+        row=None,
+        event_type="sent_to_delivery_note",
+        entity_name=day.day_name,
+        details={"run_id": run.id, "rows_detected": run.rows_detected},
+    )
+    db.session.commit()
+    return run
 
 
 def group_store_rows_by_batch(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -691,6 +1093,55 @@ def _build_ll_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], di
     return ll_rows, totals
 
 
+def _build_pack_breaker_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    breaker_map: dict[tuple[str, str], dict[str, Any]] = {}
+    batch_summary: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        batch_name = row["batch_name"]
+        batch_summary.setdefault(
+            batch_name,
+            {"batch_name": batch_name, "half_packs": 0, "quarter_packs": 0, "rows": 0},
+        )
+        for item in row["items"]:
+            fraction = round(item["quantity"] - int(item["quantity"]), 2)
+            if fraction <= 0:
+                continue
+            half_count, quarter_count = _fraction_breakdown(fraction)
+            if half_count == 0 and quarter_count == 0:
+                continue
+            key = (batch_name, item["sku"])
+            entry = breaker_map.setdefault(
+                key,
+                {
+                    "batch_name": batch_name,
+                    "sku": item["sku"],
+                    "half_packs": 0,
+                    "quarter_packs": 0,
+                    "fractional_total": 0.0,
+                },
+            )
+            entry["half_packs"] += half_count
+            entry["quarter_packs"] += quarter_count
+            entry["fractional_total"] = round(entry["fractional_total"] + fraction, 2)
+            batch_summary[batch_name]["half_packs"] += half_count
+            batch_summary[batch_name]["quarter_packs"] += quarter_count
+            batch_summary[batch_name]["rows"] += 1
+
+    rows_list = sorted(
+        breaker_map.values(),
+        key=lambda item: (_batch_sort_key(item["batch_name"]), item["sku"]),
+    )
+    batch_list = sorted(batch_summary.values(), key=lambda item: _batch_sort_key(item["batch_name"]))
+    return rows_list, batch_list
+
+
+def _fraction_breakdown(fraction: float) -> tuple[int, int]:
+    quarter_units = int(round(fraction * 4))
+    half_count = 1 if quarter_units in (2, 3) else 0
+    quarter_count = 1 if quarter_units in (1, 3) else 0
+    return half_count, quarter_count
+
+
 def _batch_to_key(batch_name: str) -> str:
     lowered = (batch_name or "").lower()
     if "2" in lowered:
@@ -738,6 +1189,92 @@ def _parse_items_text(text: str) -> list[tuple[str, float]]:
             continue
         parsed.append((sku_name, round(quantity, 4)))
     return parsed
+
+
+def _compose_pending_reason(reason_code: str | None, reason_note: str | None) -> str | None:
+    if not reason_code and not reason_note:
+        return None
+    label = PENDING_REASON_LABELS.get(reason_code or "", "Manual operations hold")
+    note = _string_value(reason_note)
+    if note:
+        return f"{label}: {note}"
+    return label
+
+
+def _expected_start_by_day(tracker_import: LoadingTrackerImport, target_day: LoadingTrackerDay) -> dict[str, float]:
+    inventory_map = _inventory_totals_by_sku(tracker_import)
+    day_sequence = [day for day in tracker_import.days if day.day_order < target_day.day_order]
+    running = dict(inventory_map)
+    for day in day_sequence:
+        counted_map = _day_count_map(day)
+        available = counted_map if counted_map else running
+        consumed = _aggregate_row_item_totals([row for row in day.planning_rows if row.row_state == PLANNED_STATE])
+        running = _subtract_maps(available, consumed)
+    return running
+
+
+def _closing_inventory_by_import(tracker_import: LoadingTrackerImport) -> dict[str, float]:
+    running = dict(_inventory_totals_by_sku(tracker_import))
+    for day in tracker_import.days:
+        counted_map = _day_count_map(day)
+        available = counted_map if counted_map else running
+        consumed = _aggregate_row_item_totals([row for row in day.planning_rows if row.row_state == PLANNED_STATE])
+        running = _subtract_maps(available, consumed)
+    return running
+
+
+def _day_count_map(day: LoadingTrackerDay) -> dict[str, float]:
+    return {item.sku_name: _float_value(item.physical_qty) for item in day.inventory_counts}
+
+
+def _day_count_snapshot(day: LoadingTrackerDay, expected_start: dict[str, float]) -> tuple[dict[str, float], list[dict[str, Any]], bool]:
+    count_lookup = _day_count_map(day)
+    all_skus = sorted(set(expected_start) | set(count_lookup))
+    rows = []
+    for sku_name in all_skus:
+        expected_qty = round(expected_start.get(sku_name, 0.0), 2)
+        physical_qty = round(count_lookup.get(sku_name, expected_qty), 2)
+        discrepancy_qty = round(physical_qty - expected_qty, 2)
+        if discrepancy_qty > 0:
+            status = "higher"
+        elif discrepancy_qty < 0:
+            status = "lower"
+        else:
+            status = "matched"
+        rows.append(
+            {
+                "sku": sku_name,
+                "expected_qty": expected_qty,
+                "physical_qty": physical_qty,
+                "discrepancy_qty": discrepancy_qty,
+                "status": status,
+            }
+        )
+    return count_lookup, rows, bool(day.inventory_counts)
+
+
+def _log_tracker_event(
+    tracker_import: LoadingTrackerImport,
+    day: LoadingTrackerDay | None,
+    row: LoadingTrackerRow | None,
+    event_type: str,
+    entity_name: str,
+    reason_code: str | None = None,
+    reason_text: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    db.session.add(
+        LoadingTrackerEvent(
+            tracker_import_id=tracker_import.id,
+            day_id=day.id if day is not None else None,
+            row_id=row.id if row is not None else None,
+            event_type=event_type,
+            entity_name=entity_name,
+            reason_code=reason_code,
+            reason_text=reason_text,
+            details_json=details or {},
+        )
+    )
 
 
 def _next_sort_order(

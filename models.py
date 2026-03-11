@@ -124,6 +124,12 @@ class LoadingTrackerImport(db.Model):
         cascade="all, delete-orphan",
         order_by="LoadingTrackerFeeItem.id.asc()",
     )
+    events = db.relationship(
+        "LoadingTrackerEvent",
+        back_populates="tracker_import",
+        cascade="all, delete-orphan",
+        order_by="LoadingTrackerEvent.created_at.desc(), LoadingTrackerEvent.id.desc()",
+    )
 
 
 class LoadingTrackerDay(db.Model):
@@ -155,6 +161,17 @@ class LoadingTrackerDay(db.Model):
         cascade="all, delete-orphan",
         order_by="LoadingTrackerRow.sort_order.asc(), LoadingTrackerRow.id.asc()",
     )
+    inventory_counts = db.relationship(
+        "LoadingTrackerDailyCount",
+        back_populates="day",
+        cascade="all, delete-orphan",
+        order_by="LoadingTrackerDailyCount.sku_name.asc()",
+    )
+    events = db.relationship(
+        "LoadingTrackerEvent",
+        back_populates="day",
+        order_by="LoadingTrackerEvent.created_at.desc(), LoadingTrackerEvent.id.desc()",
+    )
 
 
 class LoadingTrackerRow(db.Model):
@@ -184,6 +201,11 @@ class LoadingTrackerRow(db.Model):
         back_populates="row",
         cascade="all, delete-orphan",
         order_by="LoadingTrackerRowItem.id.asc()",
+    )
+    events = db.relationship(
+        "LoadingTrackerEvent",
+        back_populates="row",
+        order_by="LoadingTrackerEvent.created_at.desc(), LoadingTrackerEvent.id.desc()",
     )
 
 
@@ -221,3 +243,33 @@ class LoadingTrackerFeeItem(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
 
     tracker_import = db.relationship("LoadingTrackerImport", back_populates="fee_items")
+
+
+class LoadingTrackerDailyCount(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    day_id = db.Column(db.Integer, db.ForeignKey("loading_tracker_day.id"), nullable=False, index=True)
+    sku_name = db.Column(db.String(255), nullable=False, index=True)
+    expected_qty = db.Column(db.Numeric(14, 4), nullable=False, default=0)
+    physical_qty = db.Column(db.Numeric(14, 4), nullable=False, default=0)
+    discrepancy_qty = db.Column(db.Numeric(14, 4), nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+    day = db.relationship("LoadingTrackerDay", back_populates="inventory_counts")
+
+
+class LoadingTrackerEvent(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    tracker_import_id = db.Column(db.String(32), db.ForeignKey("loading_tracker_import.id"), nullable=False, index=True)
+    day_id = db.Column(db.Integer, db.ForeignKey("loading_tracker_day.id"), nullable=True, index=True)
+    row_id = db.Column(db.Integer, db.ForeignKey("loading_tracker_row.id"), nullable=True, index=True)
+    event_type = db.Column(db.String(64), nullable=False, index=True)
+    entity_name = db.Column(db.String(255), nullable=False)
+    reason_code = db.Column(db.String(64), nullable=True)
+    reason_text = db.Column(db.String(255), nullable=True)
+    details_json = db.Column(db.JSON, nullable=False, default=dict)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+
+    tracker_import = db.relationship("LoadingTrackerImport", back_populates="events")
+    day = db.relationship("LoadingTrackerDay", back_populates="events")
+    row = db.relationship("LoadingTrackerRow", back_populates="events")

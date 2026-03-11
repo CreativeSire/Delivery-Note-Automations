@@ -10,18 +10,25 @@ from flask import Flask, abort, flash, redirect, render_template, request, send_
 from loading_tracker_services import (
     LoadingTrackerError,
     PENDING_SENTINEL,
+    build_loading_tracker_count_context,
     build_loading_tracker_overview,
     build_loading_tracker_day_context,
     build_loading_tracker_fees_context,
+    build_loading_tracker_history_context,
     build_loading_tracker_inventory_context,
     build_loading_tracker_pending_context,
     build_loading_tracker_row_editor,
     build_loading_tracker_summary,
+    carry_forward_loading_tracker_week,
+    create_delivery_note_run_from_loading_day,
+    export_loading_tracker_history_csv,
     get_loading_tracker_day,
     get_loading_tracker_import,
     get_loading_tracker_row,
+    get_pending_reason_options,
     import_loading_tracker_workbook,
     move_loading_tracker_row,
+    save_loading_tracker_day_counts,
     save_inventory_adjustment,
     save_loading_tracker_row,
 )
@@ -347,6 +354,17 @@ def create_app(test_config: dict | None = None) -> Flask:
             day_cards=day_cards,
         )
 
+    @app.post("/loading-tracker/imports/<import_id>/carry-forward")
+    def loading_tracker_carry_forward(import_id: str) -> str:
+        try:
+            tracker_import = carry_forward_loading_tracker_week(import_id)
+        except LoadingTrackerError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("loading_tracker_import_view", import_id=import_id))
+
+        flash("A fresh week was created and the remaining G2G plus pending rows were carried forward.", "success")
+        return redirect(url_for("loading_tracker_import_view", import_id=tracker_import.id))
+
     @app.get("/loading-tracker/imports/<import_id>")
     def loading_tracker_import_view(import_id: str) -> str:
         tracker_import = get_loading_tracker_import(import_id)
@@ -392,7 +410,50 @@ def create_app(test_config: dict | None = None) -> Flask:
             tracker_import=tracker_import,
             day=day,
             day_context=build_loading_tracker_day_context(day),
+            count_context=build_loading_tracker_count_context(day),
+            pending_reason_options=get_pending_reason_options(),
         )
+
+    @app.get("/loading-tracker/imports/<import_id>/days/<day_name>/counts")
+    def loading_tracker_day_counts_view(import_id: str, day_name: str) -> str:
+        tracker_import = get_loading_tracker_import(import_id)
+        if tracker_import is None:
+            abort(404)
+        day = get_loading_tracker_day(import_id, day_name)
+        if day is None:
+            abort(404)
+        return render_template(
+            "loading_tracker_counts.html",
+            tracker_import=tracker_import,
+            day=day,
+            count_context=build_loading_tracker_count_context(day),
+        )
+
+    @app.post("/loading-tracker/imports/<import_id>/days/<day_name>/counts")
+    def loading_tracker_day_counts_save(import_id: str, day_name: str) -> str:
+        try:
+            save_loading_tracker_day_counts(import_id, day_name, dict(request.form))
+        except LoadingTrackerError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("loading_tracker_day_counts_view", import_id=import_id, day_name=day_name))
+
+        flash(f"Start-of-day physical count saved for {day_name}. Any discrepancies are now visible in the planner.", "success")
+        return redirect(url_for("loading_tracker_day_view", import_id=import_id, day_name=day_name))
+
+    @app.post("/loading-tracker/imports/<import_id>/days/<day_name>/handoff")
+    def loading_tracker_day_handoff(import_id: str, day_name: str) -> str:
+        try:
+            run = create_delivery_note_run_from_loading_day(import_id, day_name, app.config["APP_TIMEZONE"])
+        except LoadingTrackerError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("loading_tracker_day_view", import_id=import_id, day_name=day_name))
+
+        if run.rows_needing_review > 0:
+            flash("The day plan was sent to Delivery Note, but some SKUs still need review.", "warning")
+            return redirect(url_for("review_run", run_id=run.id))
+
+        flash("The final adjusted day plan has been handed off to Delivery Note.", "success")
+        return redirect(url_for("view_run", run_id=run.id))
 
     @app.get("/loading-tracker/imports/<import_id>/days/<day_name>/new")
     def loading_tracker_day_new_row(import_id: str, day_name: str) -> str:
@@ -459,9 +520,10 @@ def create_app(test_config: dict | None = None) -> Flask:
     @app.post("/loading-tracker/imports/<import_id>/rows/<int:row_id>/move")
     def loading_tracker_row_move(import_id: str, row_id: int) -> str:
         target_day_name = request.form.get("target_day_name", "").strip() or PENDING_SENTINEL
-        reason_text = request.form.get("reason_text", "").strip() or None
+        reason_code = request.form.get("reason_code", "").strip() or None
+        reason_note = request.form.get("reason_note", "").strip() or None
         try:
-            row = move_loading_tracker_row(import_id, row_id, target_day_name, reason_text)
+            row = move_loading_tracker_row(import_id, row_id, target_day_name, reason_code, reason_note)
         except LoadingTrackerError as exc:
             flash(str(exc), "error")
             return redirect(request.referrer or url_for("loading_tracker_import_view", import_id=import_id))
@@ -515,6 +577,32 @@ def create_app(test_config: dict | None = None) -> Flask:
             "loading_tracker_fees.html",
             tracker_import=tracker_import,
             fees_context=build_loading_tracker_fees_context(tracker_import),
+        )
+
+    @app.get("/loading-tracker/imports/<import_id>/history")
+    def loading_tracker_history_view(import_id: str) -> str:
+        tracker_import = get_loading_tracker_import(import_id)
+        if tracker_import is None:
+            abort(404)
+        return render_template(
+            "loading_tracker_history.html",
+            tracker_import=tracker_import,
+            history_context=build_loading_tracker_history_context(tracker_import),
+        )
+
+    @app.get("/loading-tracker/imports/<import_id>/history/download")
+    def loading_tracker_history_download(import_id: str):
+        try:
+            filename, payload = export_loading_tracker_history_csv(import_id)
+        except LoadingTrackerError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("loading_tracker_history_view", import_id=import_id))
+
+        return send_file(
+            BytesIO(payload),
+            as_attachment=True,
+            download_name=filename,
+            mimetype="text/csv",
         )
 
     @app.get("/health")

@@ -7,11 +7,15 @@
     <div>
       <p class="eyebrow">Loading Tracker · {{ day.day_name }}</p>
       <h1>{{ day.day_name }} is now editable inside the planner.</h1>
-      <p class="page-copy">Adjust store rows here, move lines into Pending when needed, and let the loading list regenerate from the live plan.</p>
+      <p class="page-copy">Start with the physical count, adjust live store rows here, move lines into Pending with a reason, and let LL plus Pack Breaker regenerate from the final day plan.</p>
     </div>
     <div class="actions">
       <a class="secondary-button" href="{{ url_for('loading_tracker_import_view', import_id=tracker_import.id) }}">Back to week</a>
+      <a class="secondary-button" href="{{ url_for('loading_tracker_day_counts_view', import_id=tracker_import.id, day_name=day.day_name) }}">Start-of-day count</a>
       <a class="primary-button" href="{{ url_for('loading_tracker_day_new_row', import_id=tracker_import.id, day_name=day.day_name) }}">Add planning row</a>
+      <form action="{{ url_for('loading_tracker_day_handoff', import_id=tracker_import.id, day_name=day.day_name) }}" method="post">
+        <button class="primary-button" type="submit">Send to Delivery Note</button>
+      </form>
     </div>
   </section>
 
@@ -45,6 +49,11 @@
       <strong>{{ day_context.metrics.batch_count }}</strong>
       <small>{{ day_context.metrics.active_store_count }} store rows</small>
     </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Count status</span>
+      <strong>{{ "Captured" if count_context.count_ready else "Pending" }}</strong>
+      <small>{{ count_context.variance_rows }} discrepancy row(s)</small>
+    </article>
   </section>
 
   <section class="content-split">
@@ -75,10 +84,17 @@
                   <span>{{ item.sku }} <strong>{{ item.quantity }}</strong></span>
                 {% endfor %}
               </div>
-              <div class="row-actions">
+              <div class="row-actions row-actions-stacked">
                 <a class="secondary-button" href="{{ url_for('loading_tracker_row_edit', import_id=tracker_import.id, row_id=row.id) }}">Edit row</a>
-                <form action="{{ url_for('loading_tracker_row_move', import_id=tracker_import.id, row_id=row.id) }}" method="post">
+                <form class="inline-move-form inline-pending-form" action="{{ url_for('loading_tracker_row_move', import_id=tracker_import.id, row_id=row.id) }}" method="post">
                   <input type="hidden" name="target_day_name" value="__pending__">
+                  <select name="reason_code" required>
+                    <option value="">Pending reason</option>
+                    {% for option in pending_reason_options %}
+                      <option value="{{ option.code }}">{{ option.label }}</option>
+                    {% endfor %}
+                  </select>
+                  <input name="reason_note" type="text" placeholder="Optional note">
                   <button class="text-button danger" type="submit">Move to pending</button>
                 </form>
               </div>
@@ -177,10 +193,67 @@
     <article class="glass-card">
       <div class="module-head compact">
         <div>
-          <p class="eyebrow">Inventory watch</p>
-          <h2>Pressure points</h2>
+          <p class="eyebrow">Pack Breaker</p>
+          <h2>Half and quarter packs</h2>
         </div>
       </div>
+      {% if day_context.pack_breaker_rows %}
+        <div class="ll-total-grid pack-breaker-summary">
+          {% for batch in day_context.pack_breaker_batches %}
+            <div>
+              <span>{{ batch.batch_name }}</span>
+              <strong>{{ batch.half_packs }} half · {{ batch.quarter_packs }} quarter</strong>
+            </div>
+          {% endfor %}
+        </div>
+        <div class="data-table">
+          <div class="table-line table-head-line pack-breaker-line">
+            <span>Batch</span>
+            <span>SKU</span>
+            <span>Half</span>
+            <span>Quarter</span>
+            <span>Fraction</span>
+          </div>
+          {% for row in day_context.pack_breaker_rows %}
+            <div class="table-line pack-breaker-line">
+              <span>{{ row.batch_name }}</span>
+              <span>{{ row.sku }}</span>
+              <span>{{ row.half_packs }}</span>
+              <span>{{ row.quarter_packs }}</span>
+              <span>{{ row.fractional_total }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No half-pack or quarter-pack breaks are needed for this day.</p>
+      {% endif %}
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Count watch</p>
+          <h2>Discrepancy and pressure points</h2>
+        </div>
+      </div>
+      {% if count_context.rows %}
+        <div class="data-table">
+          <div class="table-line table-head-line count-line">
+            <span>SKU</span>
+            <span>Expected</span>
+            <span>Physical</span>
+            <span>Gap</span>
+          </div>
+          {% for row in count_context.rows[:10] %}
+            <div class="table-line count-line">
+              <span>{{ row.sku }}</span>
+              <span>{{ row.expected_qty }}</span>
+              <span>{{ row.physical_qty }}</span>
+              <span><span class="status-pill status-{{ row.status }}">{{ row.discrepancy_qty }}</span></span>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
       {% if day_context.inventory_warnings %}
         <div class="warning-stack">
           {% for item in day_context.inventory_warnings %}

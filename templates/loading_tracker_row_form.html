@@ -43,10 +43,20 @@
             </select>
           </label>
           <label class="field">
-            <span class="field-label">Reason</span>
-            <input name="reason_text" type="text" value="{{ editor.row.reason_text if editor.row else '' }}" placeholder="Only needed if this row should stay pending">
+            <span class="field-label">Pending reason</span>
+            <select name="reason_code">
+              <option value="">Select reason</option>
+              {% for option in editor.reason_options %}
+                <option value="{{ option.code }}">{{ option.label }}</option>
+              {% endfor %}
+            </select>
           </label>
         </div>
+
+        <label class="field">
+          <span class="field-label">Reason note</span>
+          <input name="reason_note" type="text" value="" placeholder="Only needed if this row should stay pending">
+        </label>
 
         <div class="field-row">
           <label class="field">

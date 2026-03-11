@@ -2337,6 +2337,41 @@ h3 {
   margin: 0;
 }
 
+.inline-pending-form {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.inline-pending-form select,
+.inline-pending-form input,
+.count-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(20, 52, 60, 0.12);
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--ink);
+}
+
+.pack-breaker-line {
+  grid-template-columns: 1.1fr 2.4fr repeat(3, minmax(0, 0.8fr));
+}
+
+.count-line,
+.count-entry-line {
+  grid-template-columns: 2fr repeat(3, minmax(0, 1fr));
+}
+
+.history-line {
+  grid-template-columns: 1.1fr 1.2fr 0.7fr 1.4fr 2fr;
+}
+
+.count-entry-line {
+  align-items: center;
+}
+
 @media (max-width: 1280px) {
   .premium-shell,
   .module-stage,
@@ -2382,7 +2417,11 @@ h3 {
   .ll-table-line,
   .inventory-line,
   .fees-line,
-  .two-col-line {
+  .two-col-line,
+  .pack-breaker-line,
+  .count-line,
+  .count-entry-line,
+  .history-line {
     grid-template-columns: 1fr;
   }
 }
