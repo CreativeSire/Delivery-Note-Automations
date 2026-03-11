@@ -130,6 +130,27 @@ class LoadingTrackerImport(db.Model):
         cascade="all, delete-orphan",
         order_by="LoadingTrackerEvent.created_at.desc(), LoadingTrackerEvent.id.desc()",
     )
+    import_jobs = db.relationship(
+        "LoadingTrackerImportJob",
+        back_populates="tracker_import",
+        order_by="LoadingTrackerImportJob.created_at.desc()",
+    )
+
+
+class LoadingTrackerImportJob(db.Model):
+    id = db.Column(db.String(32), primary_key=True)
+    filename = db.Column(db.String(255), nullable=False)
+    status = db.Column(db.String(32), nullable=False, default="queued", index=True)
+    progress_percent = db.Column(db.Integer, nullable=False, default=0)
+    stage_label = db.Column(db.String(255), nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    tracker_import_id = db.Column(
+        db.String(32), db.ForeignKey("loading_tracker_import.id"), nullable=True, index=True
+    )
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+    tracker_import = db.relationship("LoadingTrackerImport", back_populates="import_jobs")
 
 
 class LoadingTrackerDay(db.Model):

@@ -29,44 +29,44 @@
         </nav>
 
         <section class="sidebar-panel sidebar-panel-strong">
-          <span class="panel-label">Delivery Note source</span>
-          {% if app_summary.latest_import %}
-            <strong class="sidebar-source">{{ app_summary.latest_import.filename }}</strong>
-            <span class="sidebar-meta">{{ app_summary.latest_import.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
-          {% else %}
-            <strong class="sidebar-source">No UOM source loaded</strong>
-            <span class="sidebar-meta">Bring in the live master when you are ready.</span>
-          {% endif %}
+          <span class="panel-label">Workspace state</span>
+          <div class="sidebar-status-list">
+            <div class="sidebar-status-row">
+              <span>Delivery Note source</span>
+              <strong>{{ "Ready" if app_summary.latest_import else "Needs setup" }}</strong>
+            </div>
+            <div class="sidebar-status-row">
+              <span>Loading week</span>
+              <strong>{{ "Live" if loading_summary.latest_import else "Not loaded" }}</strong>
+            </div>
+            <div class="sidebar-status-row">
+              <span>Corrections memory</span>
+              <strong>{{ "Active" if app_summary.alias_count else "Starting" }}</strong>
+            </div>
+          </div>
+          <span class="sidebar-meta">Operational source names stay inside their own modules, not in the main shell.</span>
         </section>
 
         <section class="sidebar-panel">
-          <span class="panel-label">Loading Tracker live file</span>
-          {% if loading_summary.latest_import %}
-            <strong class="sidebar-source">{{ loading_summary.latest_import.week_label }}</strong>
-            <span class="sidebar-meta">{{ loading_summary.latest_import.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
-          {% else %}
-            <strong class="sidebar-source">No planning workbook yet</strong>
-            <span class="sidebar-meta">Import the weekly tracker to unlock live planning.</span>
-          {% endif %}
-        </section>
-
-        <section class="sidebar-stat-grid">
-          <article class="sidebar-stat">
-            <span class="metric-label">Products</span>
-            <strong>{{ app_summary.product_count }}</strong>
-          </article>
-          <article class="sidebar-stat">
-            <span class="metric-label">DN Runs</span>
-            <strong>{{ app_summary.run_count }}</strong>
-          </article>
-          <article class="sidebar-stat">
-            <span class="metric-label">Tracker Days</span>
-            <strong>{{ loading_summary.latest_import.days|length if loading_summary.latest_import else 0 }}</strong>
-          </article>
-          <article class="sidebar-stat">
-            <span class="metric-label">Pending</span>
-            <strong>{{ loading_summary.total_pending_stores }}</strong>
-          </article>
+          <span class="panel-label">Quick pulse</span>
+          <div class="sidebar-pulse-grid">
+            <div>
+              <span class="metric-label">Products</span>
+              <strong>{{ app_summary.product_count }}</strong>
+            </div>
+            <div>
+              <span class="metric-label">DN runs</span>
+              <strong>{{ app_summary.run_count }}</strong>
+            </div>
+            <div>
+              <span class="metric-label">Tracker days</span>
+              <strong>{{ loading_summary.latest_import.days|length if loading_summary.latest_import else 0 }}</strong>
+            </div>
+            <div>
+              <span class="metric-label">Pending</span>
+              <strong>{{ loading_summary.total_pending_stores }}</strong>
+            </div>
+          </div>
         </section>
       </aside>
 

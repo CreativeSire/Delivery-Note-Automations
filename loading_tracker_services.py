@@ -3,17 +3,17 @@ from __future__ import annotations
 import csv
 import smtplib
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from flask import current_app
 from openpyxl import load_workbook
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from models import (
     LoadingTrackerDay,
@@ -21,6 +21,7 @@ from models import (
     LoadingTrackerEvent,
     LoadingTrackerFeeItem,
     LoadingTrackerImport,
+    LoadingTrackerImportJob,
     LoadingTrackerInventoryItem,
     LoadingTrackerRow,
     LoadingTrackerRowItem,
@@ -52,6 +53,7 @@ PENDING_STATE = "pending"
 PENDING_SENTINEL = "__pending__"
 INVALID_FILENAME_CHARS = r'[<>:"/\\|?*\x00-\x1f]'
 DEFAULT_BATCHES = ["Load 1", "Load 2", "Load 3", "Load 4", "Unassigned"]
+RUNNING_IMPORT_STATUSES = {"queued", "running"}
 PENDING_REASON_OPTIONS = [
     {"code": "stock_shortage", "label": "Insufficient stock"},
     {"code": "receiving_day", "label": "Store does not receive today"},
@@ -61,6 +63,25 @@ PENDING_REASON_OPTIONS = [
     {"code": "manual_hold", "label": "Manual operations hold"},
 ]
 PENDING_REASON_LABELS = {item["code"]: item["label"] for item in PENDING_REASON_OPTIONS}
+NON_PRODUCT_HEADERS = {
+    "contact",
+    "lp",
+    "tier",
+    "region",
+    "weight",
+    "value",
+    "date",
+    "date assigned",
+    "customer's name",
+    "customers name",
+    "location",
+    "cartons delivered",
+    "no of delivery notes",
+    "wjc invoice",
+    "no of receipts",
+    "products descriptions",
+    "load for external delivery",
+}
 
 
 class LoadingTrackerError(Exception):
@@ -80,6 +101,122 @@ class LoadingTrackerSummary:
 
 def get_pending_reason_options() -> list[dict[str, str]]:
     return list(PENDING_REASON_OPTIONS)
+
+
+def create_loading_tracker_import_job(filename: str) -> LoadingTrackerImportJob:
+    job = LoadingTrackerImportJob(
+        id=uuid4().hex,
+        filename=filename,
+        status="queued",
+        progress_percent=2,
+        stage_label="Queued",
+    )
+    db.session.add(job)
+    db.session.commit()
+    return job
+
+
+def get_loading_tracker_import_job(job_id: str) -> LoadingTrackerImportJob | None:
+    return db.session.get(LoadingTrackerImportJob, job_id)
+
+
+def get_active_loading_tracker_import_job() -> LoadingTrackerImportJob | None:
+    return db.session.scalar(
+        select(LoadingTrackerImportJob)
+        .where(LoadingTrackerImportJob.status.in_(tuple(RUNNING_IMPORT_STATUSES)))
+        .order_by(LoadingTrackerImportJob.created_at.desc())
+        .limit(1)
+    )
+
+
+def serialize_loading_tracker_import_job(job: LoadingTrackerImportJob | None) -> dict[str, Any] | None:
+    if job is None:
+        return None
+    return {
+        "id": job.id,
+        "filename": job.filename,
+        "status": job.status,
+        "progress_percent": job.progress_percent or 0,
+        "stage_label": job.stage_label or "",
+        "error_message": job.error_message or "",
+        "tracker_import_id": job.tracker_import_id,
+        "created_at": job.created_at.isoformat() if job.created_at else "",
+        "updated_at": job.updated_at.isoformat() if job.updated_at else "",
+    }
+
+
+def update_loading_tracker_import_job(
+    job_id: str,
+    *,
+    status: str | None = None,
+    progress_percent: int | None = None,
+    stage_label: str | None = None,
+    error_message: str | None = None,
+    tracker_import_id: str | None = None,
+) -> None:
+    values: dict[str, Any] = {"updated_at": datetime.now(UTC)}
+    if status is not None:
+        values["status"] = status
+    if progress_percent is not None:
+        values["progress_percent"] = max(0, min(int(progress_percent), 100))
+    if stage_label is not None:
+        values["stage_label"] = stage_label
+    if error_message is not None:
+        values["error_message"] = error_message
+    if tracker_import_id is not None:
+        values["tracker_import_id"] = tracker_import_id
+
+    with db.engine.begin() as connection:
+        connection.execute(
+            update(LoadingTrackerImportJob)
+            .where(LoadingTrackerImportJob.id == job_id)
+            .values(**values)
+        )
+
+
+def run_loading_tracker_import_job(job_id: str, workbook_path: str | Path, filename: str) -> None:
+    workbook_path = Path(workbook_path)
+    update_loading_tracker_import_job(
+        job_id,
+        status="running",
+        progress_percent=6,
+        stage_label="Opening workbook",
+        error_message="",
+    )
+
+    try:
+        with workbook_path.open("rb") as handle:
+            tracker_import = import_loading_tracker_workbook(
+                handle,
+                filename=filename,
+                progress_callback=lambda progress, stage: update_loading_tracker_import_job(
+                    job_id,
+                    status="running",
+                    progress_percent=progress,
+                    stage_label=stage,
+                ),
+            )
+        update_loading_tracker_import_job(
+            job_id,
+            status="completed",
+            progress_percent=100,
+            stage_label="Live planning ready",
+            tracker_import_id=tracker_import.id,
+        )
+    except Exception as exc:  # pragma: no cover - background thread safety
+        update_loading_tracker_import_job(
+            job_id,
+            status="failed",
+            progress_percent=100,
+            stage_label="Import failed",
+            error_message=str(exc),
+        )
+    finally:
+        try:
+            workbook_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        db.session.remove()
 
 
 def build_loading_tracker_summary() -> LoadingTrackerSummary:
@@ -122,9 +259,15 @@ def build_loading_tracker_summary() -> LoadingTrackerSummary:
     )
 
 
-def import_loading_tracker_workbook(file_storage: Any) -> LoadingTrackerImport:
+def import_loading_tracker_workbook(
+    file_storage: Any,
+    *,
+    filename: str | None = None,
+    progress_callback: Callable[[int, str], None] | None = None,
+) -> LoadingTrackerImport:
+    _report_import_progress(progress_callback, 8, "Opening workbook")
     workbook = _load_workbook_from_upload(file_storage)
-    filename = file_storage.filename or "loading-tracker.xlsx"
+    filename = filename or getattr(file_storage, "filename", None) or "loading-tracker.xlsx"
     imported_pending_count = 0
 
     present_day_sheets = [name for name in DAY_SHEET_NAMES if name in workbook.sheetnames]
@@ -140,12 +283,14 @@ def import_loading_tracker_workbook(file_storage: Any) -> LoadingTrackerImport:
 
     assumptions_sheet = workbook["Assumptions"] if "Assumptions" in workbook.sheetnames else None
     if assumptions_sheet is not None:
+        _report_import_progress(progress_callback, 16, "Reading assumptions")
         assumptions = _parse_assumptions_sheet(assumptions_sheet)
         tracker_import.assumptions_sku_count = assumptions["sku_count"]
         tracker_import.assumptions_store_count = assumptions["store_count"]
 
     opening_sheet = workbook["Opening Inventory"] if "Opening Inventory" in workbook.sheetnames else None
     if opening_sheet is not None:
+        _report_import_progress(progress_callback, 24, "Reading opening inventory")
         opening = _parse_inventory_sheet(opening_sheet)
         tracker_import.opening_g2g_total = opening["g2g_total"]
         tracker_import.opening_remaining_total = opening["remaining_total"]
@@ -164,6 +309,7 @@ def import_loading_tracker_workbook(file_storage: Any) -> LoadingTrackerImport:
 
     pending_sheet = workbook["Pending Orders"] if "Pending Orders" in workbook.sheetnames else None
     if pending_sheet is not None:
+        _report_import_progress(progress_callback, 34, "Reading pending lines")
         pending = _parse_support_sheet(pending_sheet)
         tracker_import.pending_g2g_total = pending["g2g_total"]
         tracker_import.pending_loaded_total = pending["loaded_total"]
@@ -184,6 +330,7 @@ def import_loading_tracker_workbook(file_storage: Any) -> LoadingTrackerImport:
 
     fee_sheet = _resolve_fee_sheet(workbook)
     if fee_sheet is not None:
+        _report_import_progress(progress_callback, 44, "Reading fee controls")
         fees = _parse_fee_sheet(fee_sheet)
         tracker_import.fees_row_count = fees["row_count"]
         tracker_import.fees_total_delivery_value = fees["total_delivery_value"]
@@ -205,7 +352,10 @@ def import_loading_tracker_workbook(file_storage: Any) -> LoadingTrackerImport:
     if notes_sheet is not None:
         tracker_import.notes_count = _count_note_lines(notes_sheet)
 
+    total_days = max(len(present_day_sheets), 1)
     for order, day_name in enumerate(present_day_sheets, start=1):
+        day_progress = 50 + int(((order - 1) / total_days) * 38)
+        _report_import_progress(progress_callback, day_progress, f"Reading {day_name} planning")
         planning_sheet = workbook[day_name]
         load_sheet = workbook[LL_SHEET_MAP[day_name]] if LL_SHEET_MAP.get(day_name) in workbook.sheetnames else None
         parsed_day = _parse_day_sheet(planning_sheet, day_name, load_sheet)
@@ -242,6 +392,7 @@ def import_loading_tracker_workbook(file_storage: Any) -> LoadingTrackerImport:
                 source_kind="import",
             )
 
+    _report_import_progress(progress_callback, 96, "Saving live planning")
     _log_tracker_event(
         tracker_import=tracker_import,
         day=None,
@@ -255,6 +406,7 @@ def import_loading_tracker_workbook(file_storage: Any) -> LoadingTrackerImport:
         },
     )
     db.session.commit()
+    _report_import_progress(progress_callback, 99, "Finalizing")
     return tracker_import
 
 
@@ -1422,6 +1574,10 @@ def _parse_day_sheet(sheet: Any, day_name: str, load_sheet: Any | None) -> dict[
             row_index += 1
             continue
 
+        if grid["value_col"] and value <= 0:
+            row_index += 1
+            continue
+
         if total_quantity <= 0 and value <= 0 and weight <= 0:
             row_index += 1
             continue
@@ -1497,6 +1653,10 @@ def _parse_support_sheet(sheet: Any) -> dict[str, Any]:
             if not store_name:
                 row_index += 1
                 continue
+            row_value = _float_value(cell(row_index, grid["value_col"]).value) if grid["value_col"] else 0.0
+            if grid["value_col"] and row_value <= 0:
+                row_index += 1
+                continue
             items: list[dict[str, Any]] = []
             total_quantity = 0.0
             for column_index, sku_name in product_headers:
@@ -1513,9 +1673,7 @@ def _parse_support_sheet(sheet: Any) -> dict[str, Any]:
                         "store_name": store_name,
                         "contact": _string_value(cell(row_index, grid["contact_col"]).value) if grid["contact_col"] else "",
                         "region": _string_value(cell(row_index, grid["region_col"]).value) if grid["region_col"] else "",
-                        "value": round(_float_value(cell(row_index, grid["value_col"]).value), 2)
-                        if grid["value_col"]
-                        else 0.0,
+                        "value": round(row_value, 2),
                         "total_quantity": round(total_quantity, 2),
                         "items": items,
                         "top_items": items[:5],
@@ -1712,17 +1870,12 @@ def _locate_day_grid(sheet: Any) -> dict[str, Any]:
 
 
 def _locate_support_grid(sheet: Any) -> dict[str, Any]:
-    _, max_column = _sheet_bounds(sheet)
     cell = sheet.cell
     try:
         return _locate_day_grid(sheet)
     except LoadingTrackerError:
         product_header_row = _find_row_index(sheet, "PRODUCTS DESCRIPTIONS") or 2
-        product_headers = []
-        for column_index in range(10, max_column + 1):
-            sku_name = _string_value(cell(product_header_row, column_index).value)
-            if sku_name:
-                product_headers.append((column_index, sku_name))
+        product_headers = _collect_product_headers(sheet, product_header_row, 10)
         return {
             "header_row_index": None,
             "store_col": None,
@@ -1744,11 +1897,7 @@ def _build_grid_definition(sheet: Any, header_row_index: int, store_col: int) ->
         _normalize_text(cell(header_row_index, column_index).value): column_index
         for column_index in range(1, min(max_column, store_col + 20) + 1)
     }
-    product_headers = []
-    for column_index in range(store_col + 1, max_column + 1):
-        sku_name = _string_value(cell(header_row_index, column_index).value)
-        if sku_name:
-            product_headers.append((column_index, sku_name))
+    product_headers = _collect_product_headers(sheet, header_row_index, store_col + 1)
 
     return {
         "header_row_index": header_row_index,
@@ -1762,6 +1911,36 @@ def _build_grid_definition(sheet: Any, header_row_index: int, store_col: int) ->
         "date_col": header_values.get("date"),
         "product_headers": product_headers,
     }
+
+
+def _collect_product_headers(sheet: Any, header_row_index: int, start_column: int) -> list[tuple[int, str]]:
+    _, max_column = _sheet_bounds(sheet)
+    product_headers: list[tuple[int, str]] = []
+    found_first_product = False
+    for column_index in range(start_column, max_column + 1):
+        raw_header = sheet.cell(header_row_index, column_index).value
+        sku_name = _string_value(raw_header)
+        if _is_product_header(sku_name):
+            product_headers.append((column_index, sku_name))
+            found_first_product = True
+            continue
+        if found_first_product:
+            break
+    return product_headers
+
+
+def _is_product_header(value: Any) -> bool:
+    text = _string_value(value)
+    if not text:
+        return False
+    normalized = _normalize_text(text)
+    if normalized in NON_PRODUCT_HEADERS:
+        return False
+    if normalized.isdigit():
+        return False
+    if _decimal_value(text) is not None:
+        return False
+    return any(character.isalpha() for character in text)
 
 
 def _find_row_index(sheet: Any, label: str) -> int | None:
@@ -1800,8 +1979,17 @@ def _batch_sort_key(batch_name: str) -> tuple[int, str]:
 
 
 def _load_workbook_from_upload(file_storage: Any):
+    if isinstance(file_storage, (str, Path)):
+        try:
+            return load_workbook(file_storage, data_only=True, keep_links=False)
+        except Exception as exc:  # pragma: no cover
+            raise LoadingTrackerError("The uploaded file could not be read as an Excel workbook.") from exc
+
     payload = file_storage.read()
-    file_storage.stream.seek(0)
+    if hasattr(file_storage, "seek"):
+        file_storage.seek(0)
+    elif hasattr(file_storage, "stream") and hasattr(file_storage.stream, "seek"):
+        file_storage.stream.seek(0)
     try:
         return load_workbook(BytesIO(payload), data_only=True, keep_links=False)
     except Exception as exc:  # pragma: no cover
@@ -1862,3 +2050,13 @@ def _clean_filename_part(value: str, fallback: str) -> str:
     if not cleaned:
         return fallback
     return cleaned[:90].rstrip(" .-")
+
+
+def _report_import_progress(
+    progress_callback: Callable[[int, str], None] | None,
+    progress_percent: int,
+    stage_label: str,
+) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(progress_percent, stage_label)

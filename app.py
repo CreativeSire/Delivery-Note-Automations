@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 import secrets
+import threading
 from io import BytesIO
 from pathlib import Path
 
-from flask import Flask, abort, flash, redirect, render_template, request, send_file, url_for
+from flask import Flask, abort, flash, jsonify, redirect, render_template, request, send_file, url_for
+from werkzeug.utils import secure_filename
 
 from loading_tracker_services import (
     LoadingTrackerError,
@@ -20,17 +22,22 @@ from loading_tracker_services import (
     build_loading_tracker_row_editor,
     build_loading_tracker_summary,
     carry_forward_loading_tracker_week,
+    create_loading_tracker_import_job,
     create_delivery_note_run_from_loading_day,
     export_loading_tracker_history_csv,
+    get_active_loading_tracker_import_job,
     get_loading_tracker_day,
     get_loading_tracker_import,
+    get_loading_tracker_import_job,
     get_loading_tracker_row,
     get_pending_reason_options,
     import_loading_tracker_workbook,
     move_loading_tracker_row,
+    run_loading_tracker_import_job,
     save_loading_tracker_day_counts,
     save_inventory_adjustment,
     save_loading_tracker_row,
+    serialize_loading_tracker_import_job,
 )
 from models import Product, db
 from services import (
@@ -67,6 +74,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         MAIL_PASSWORD=os.environ.get("MAIL_PASSWORD", ""),
         MAIL_FROM=os.environ.get("MAIL_FROM", ""),
         MAIL_USE_TLS=os.environ.get("MAIL_USE_TLS", "true").lower() != "false",
+        LOADING_TRACKER_IMPORT_SYNC=os.environ.get("LOADING_TRACKER_IMPORT_SYNC", "").lower() == "true",
         SQLALCHEMY_DATABASE_URI=_database_uri(app.instance_path),
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
     )
@@ -372,11 +380,15 @@ def create_app(test_config: dict | None = None) -> Flask:
         tracker_import = get_loading_tracker_import()
         overview = build_loading_tracker_overview(tracker_import)
         day_cards = tracker_import.days if tracker_import is not None else []
+        active_import_job = get_loading_tracker_import_job(request.args.get("job")) if request.args.get("job") else None
+        if active_import_job is None:
+            active_import_job = get_active_loading_tracker_import_job()
         return render_template(
             "loading_tracker_home.html",
             tracker_import=tracker_import,
             overview=overview,
             day_cards=day_cards,
+            active_import_job=serialize_loading_tracker_import_job(active_import_job),
         )
 
     @app.post("/loading-tracker/imports/<import_id>/carry-forward")
@@ -401,6 +413,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             tracker_import=tracker_import,
             overview=overview,
             day_cards=tracker_import.days,
+            active_import_job=serialize_loading_tracker_import_job(get_active_loading_tracker_import_job()),
         )
 
     @app.post("/loading-tracker/import")
@@ -410,17 +423,45 @@ def create_app(test_config: dict | None = None) -> Flask:
             flash("Please choose the weekly loading tracker workbook first.", "error")
             return redirect(url_for("loading_tracker_home"))
 
-        try:
-            tracker_import = import_loading_tracker_workbook(uploaded_file)
-        except LoadingTrackerError as exc:
-            flash(str(exc), "error")
-            return redirect(url_for("loading_tracker_home"))
+        filename = uploaded_file.filename or "loading-tracker.xlsx"
+        job = create_loading_tracker_import_job(filename)
+        job_id = job.id
+        saved_path = _save_loading_tracker_upload(app.instance_path, job_id, uploaded_file)
 
-        flash(
-            f"Loading tracker imported. {len(tracker_import.days)} day sheet(s), {len(tracker_import.pending_rows_json or [])} pending row(s), and {tracker_import.fees_row_count} fee row(s) were captured.",
-            "success",
-        )
-        return redirect(url_for("loading_tracker_import_view", import_id=tracker_import.id))
+        if app.config.get("TESTING") or app.config.get("LOADING_TRACKER_IMPORT_SYNC"):
+            run_loading_tracker_import_job(job_id, saved_path, filename)
+        else:
+            thread = threading.Thread(
+                target=_run_loading_tracker_import_job_in_background,
+                args=(app, job_id, saved_path, filename),
+                daemon=True,
+            )
+            thread.start()
+
+        if _wants_json():
+            return (
+                jsonify(
+                    {
+                        "job": serialize_loading_tracker_import_job(get_loading_tracker_import_job(job_id)),
+                        "status_url": url_for("loading_tracker_import_job_status", job_id=job_id),
+                    }
+                ),
+                202,
+            )
+
+        flash("Weekly tracker import started in the background. We will keep building the live week for you.", "success")
+        return redirect(url_for("loading_tracker_home", job=job_id))
+
+    @app.get("/loading-tracker/jobs/<job_id>")
+    def loading_tracker_import_job_status(job_id: str):
+        job = get_loading_tracker_import_job(job_id)
+        if job is None:
+            abort(404)
+
+        payload = serialize_loading_tracker_import_job(job) or {}
+        if job.tracker_import_id:
+            payload["redirect_url"] = url_for("loading_tracker_import_view", import_id=job.tracker_import_id)
+        return jsonify(payload)
 
     @app.get("/loading-tracker/imports/<import_id>/days/<day_name>")
     def loading_tracker_day_view(import_id: str, day_name: str) -> str:
@@ -635,6 +676,29 @@ def create_app(test_config: dict | None = None) -> Flask:
         return {"status": "ok"}
 
     return app
+
+
+def _run_loading_tracker_import_job_in_background(
+    app: Flask,
+    job_id: str,
+    saved_path: Path,
+    filename: str,
+) -> None:
+    with app.app_context():
+        run_loading_tracker_import_job(job_id, saved_path, filename)
+
+
+def _save_loading_tracker_upload(instance_path: str, job_id: str, uploaded_file) -> Path:
+    upload_root = Path(instance_path) / "loading_tracker_jobs"
+    upload_root.mkdir(parents=True, exist_ok=True)
+    safe_name = secure_filename(uploaded_file.filename or "loading-tracker.xlsx") or "loading-tracker.xlsx"
+    saved_path = upload_root / f"{job_id}-{safe_name}"
+    uploaded_file.save(saved_path)
+    return saved_path
+
+
+def _wants_json() -> bool:
+    return request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.accept_mimetypes.best == "application/json"
 
 
 def _database_uri(instance_path: str) -> str:

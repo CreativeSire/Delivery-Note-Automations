@@ -6,8 +6,8 @@
   <section class="hero-band">
     <div>
       <p class="eyebrow">Loading Tracker</p>
-      <h1>Editable day planning, live counts, generated pending, LL, and Pack Breaker from one planning flow.</h1>
-      <p class="page-copy">Import the weekly workbook once, then keep planning inside the app. Start new weeks from carry-forward instead of depending on a fresh workbook every day.</p>
+      <h1>Plan the week once, then run each day from a calmer live workspace.</h1>
+      <p class="page-copy">Bring in the weekly workbook, let the import finish in the background, and keep daily planning inside DALA OPERATIONS.</p>
     </div>
     <div class="actions">
       {% if tracker_import %}
@@ -41,8 +41,35 @@
           <span class="info-chip">BP New Fees</span>
         </div>
         <button class="primary-button" type="submit" data-submit-button>Import weekly tracker</button>
-        <p class="subtle-note" data-submit-note hidden>Importing workbook and building live planning data. Large weekly files can take a few seconds.</p>
+        <p class="subtle-note" data-submit-note hidden>We’re importing in the background. You can stay on this page while the week is being prepared.</p>
       </form>
+
+      <section
+        class="import-progress-card {% if not active_import_job %}is-hidden{% endif %}"
+        id="loading-tracker-progress"
+        {% if active_import_job %}
+          data-job-id="{{ active_import_job.id }}"
+          data-status-url="{{ url_for('loading_tracker_import_job_status', job_id=active_import_job.id) }}"
+        {% endif %}
+      >
+        <div class="import-progress-head">
+          <div>
+            <p class="eyebrow">Background import</p>
+            <h3 data-job-stage>{{ active_import_job.stage_label if active_import_job else 'Preparing import' }}</h3>
+          </div>
+          <span class="status-pill status-neutral" data-job-status>{{ active_import_job.status if active_import_job else 'queued' }}</span>
+        </div>
+        <div class="import-progress-bar">
+          <span data-job-bar style="width: {{ active_import_job.progress_percent if active_import_job else 0 }}%;"></span>
+        </div>
+        <div class="import-progress-meta">
+          <strong data-job-percent>{{ active_import_job.progress_percent if active_import_job else 0 }}%</strong>
+          <span data-job-file>{{ active_import_job.filename if active_import_job else '' }}</span>
+        </div>
+        <p class="subtle-note import-progress-note" data-job-error {% if not active_import_job or not active_import_job.error_message %}hidden{% endif %}>
+          {{ active_import_job.error_message if active_import_job else '' }}
+        </p>
+      </section>
     </article>
 
     <article class="glass-card">
@@ -55,10 +82,6 @@
       {% if tracker_import %}
         <div class="tracker-overview-stack">
           <div class="tracker-overview-row">
-            <span class="metric-label">Imported file</span>
-            <strong>{{ tracker_import.filename }}</strong>
-          </div>
-          <div class="tracker-overview-row">
             <span class="metric-label">Planning days</span>
             <strong>{{ overview.day_count }}</strong>
           </div>
@@ -67,12 +90,12 @@
             <strong>{{ overview.total_pending_rows }}</strong>
           </div>
           <div class="tracker-overview-row">
-            <span class="metric-label">Live history</span>
-            <strong>{{ tracker_import.events|length }}</strong>
+            <span class="metric-label">Largest day</span>
+            <strong>{{ overview.largest_day_name or 'Not started' }}</strong>
           </div>
           <div class="tracker-overview-row">
-            <span class="metric-label">Largest day</span>
-            <strong>{{ overview.largest_day_name or 'None yet' }}</strong>
+            <span class="metric-label">History events</span>
+            <strong>{{ tracker_import.events|length }}</strong>
           </div>
         </div>
       {% else %}
@@ -165,18 +188,117 @@
 {% endblock %}
 
 {% block scripts %}
-  <script>
+      <script>
     (() => {
       const form = document.getElementById("loading-tracker-import-form");
-      if (!form) return;
+      const progressCard = document.getElementById("loading-tracker-progress");
+      if (!form || !progressCard) return;
       const button = form.querySelector("[data-submit-button]");
       const note = form.querySelector("[data-submit-note]");
-      form.addEventListener("submit", () => {
-        if (!button) return;
-        button.disabled = true;
-        button.textContent = "Importing weekly tracker...";
+      const stage = progressCard.querySelector("[data-job-stage]");
+      const status = progressCard.querySelector("[data-job-status]");
+      const bar = progressCard.querySelector("[data-job-bar]");
+      const percent = progressCard.querySelector("[data-job-percent]");
+      const file = progressCard.querySelector("[data-job-file]");
+      const error = progressCard.querySelector("[data-job-error]");
+      let pollTimer = null;
+
+      const paintJob = (job) => {
+        if (!job) return;
+        progressCard.classList.remove("is-hidden");
+        progressCard.dataset.jobId = job.id;
+        if (job.status_url) {
+          progressCard.dataset.statusUrl = job.status_url;
+        }
+        if (stage) stage.textContent = job.stage_label || "Preparing import";
+        if (status) status.textContent = (job.status || "queued").replaceAll("_", " ");
+        if (bar) bar.style.width = `${job.progress_percent || 0}%`;
+        if (percent) percent.textContent = `${job.progress_percent || 0}%`;
+        if (file) file.textContent = job.filename || "";
+        if (error) {
+          error.textContent = job.error_message || "";
+          error.hidden = !job.error_message;
+        }
+      };
+
+      const stopPolling = () => {
+        if (pollTimer) {
+          window.clearTimeout(pollTimer);
+          pollTimer = null;
+        }
+      };
+
+      const pollJob = async () => {
+        const statusUrl = progressCard.dataset.statusUrl;
+        if (!statusUrl) return;
+        try {
+          const response = await fetch(statusUrl, { headers: { "Accept": "application/json" } });
+          if (!response.ok) throw new Error("Could not refresh import status.");
+          const job = await response.json();
+          paintJob(job);
+          if (job.status === "completed" && job.redirect_url) {
+            window.location.assign(job.redirect_url);
+            return;
+          }
+          if (job.status === "failed") {
+            if (button) {
+              button.disabled = false;
+              button.textContent = "Import weekly tracker";
+            }
+            stopPolling();
+            return;
+          }
+          pollTimer = window.setTimeout(pollJob, 1200);
+        } catch (fetchError) {
+          if (error) {
+            error.textContent = fetchError.message || "Could not refresh import status.";
+            error.hidden = false;
+          }
+          if (button) {
+            button.disabled = false;
+            button.textContent = "Import weekly tracker";
+          }
+          stopPolling();
+        }
+      };
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (button) {
+          button.disabled = true;
+          button.textContent = "Starting import...";
+        }
         if (note) note.hidden = false;
+
+        try {
+          const response = await fetch(form.action, {
+            method: "POST",
+            body: new FormData(form),
+            headers: {
+              "Accept": "application/json",
+              "X-Requested-With": "XMLHttpRequest"
+            }
+          });
+          if (!response.ok) throw new Error("The workbook could not be queued.");
+          const payload = await response.json();
+          paintJob({ ...(payload.job || {}), status_url: payload.status_url });
+          stopPolling();
+          pollJob();
+        } catch (submitError) {
+          if (error) {
+            error.textContent = submitError.message || "The workbook could not be queued.";
+            error.hidden = false;
+          }
+          if (button) {
+            button.disabled = false;
+            button.textContent = "Import weekly tracker";
+          }
+        }
       });
+
+      if (progressCard.dataset.statusUrl) {
+        pollJob();
+      }
     })();
   </script>
 {% endblock %}

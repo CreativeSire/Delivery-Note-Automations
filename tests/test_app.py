@@ -227,6 +227,26 @@ def build_loading_tracker_uom_workbook() -> BytesIO:
     return stream
 
 
+def build_loading_tracker_workbook_with_duplicate_sections() -> BytesIO:
+    workbook = Workbook()
+    workbook_stream = build_loading_tracker_workbook()
+    workbook_stream.seek(0)
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(workbook_stream)
+    tues = workbook["Tues"]
+    tues.cell(40, 4, "Value")
+    tues.cell(40, 9, "Store Two")
+    tues.cell(40, 10, 999999)
+    tues.cell(40, 11, 888888)
+    tues.cell(40, 7, None)
+
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    return stream
+
+
 def test_end_to_end_review_and_alias_memory() -> None:
     with TemporaryDirectory() as temp_dir:
         app = create_app(
@@ -754,6 +774,7 @@ def test_loading_tracker_import_builds_initial_module_views() -> None:
                 "TESTING": True,
                 "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
                 "APP_TIMEZONE": "Africa/Lagos",
+                "LOADING_TRACKER_IMPORT_SYNC": True,
             }
         )
 
@@ -764,12 +785,14 @@ def test_loading_tracker_import_builds_initial_module_views() -> None:
             "/loading-tracker/import",
             data={"loading_tracker_workbook": (BytesIO(workbook.getvalue()), "Week 4 Loading Tracker.xlsx")},
             content_type="multipart/form-data",
-            follow_redirects=True,
+            headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
         )
-        html = response.get_data(as_text=True)
-        assert response.status_code == 200
-        assert "Loading tracker imported." in html
-        assert "Week 4 Loading Tracker" in html
+        payload = response.get_json()
+        assert response.status_code == 202
+        assert payload is not None
+        assert payload["job"]["status"] == "completed"
+        assert payload["job"]["tracker_import_id"]
+        import_id = payload["job"]["tracker_import_id"]
 
         with app.app_context():
             tracker_import = db.session.query(LoadingTrackerImport).one()
@@ -781,12 +804,17 @@ def test_loading_tracker_import_builds_initial_module_views() -> None:
             assert mon.batch_count == 2
             assert mon.active_store_count == 2
             assert float(mon.load_total) == 4.0
-            import_id = tracker_import.id
+            assert tracker_import.id == import_id
+
+        status_response = client.get(payload["status_url"])
+        assert status_response.status_code == 200
+        status_payload = status_response.get_json()
+        assert status_payload["status"] == "completed"
 
         day_response = client.get(f"/loading-tracker/imports/{import_id}/days/Mon")
         assert day_response.status_code == 200
         day_html = day_response.get_data(as_text=True)
-        assert "Mon is now editable inside the planner." in day_html
+        assert "Mon planning workspace." in day_html
         assert "Generated LL" in day_html
         assert "Store One" in day_html
 
@@ -808,6 +836,7 @@ def test_loading_tracker_live_move_and_inventory_adjustment() -> None:
                 "TESTING": True,
                 "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
                 "APP_TIMEZONE": "Africa/Lagos",
+                "LOADING_TRACKER_IMPORT_SYNC": True,
             }
         )
 
@@ -818,8 +847,9 @@ def test_loading_tracker_live_move_and_inventory_adjustment() -> None:
             "/loading-tracker/import",
             data={"loading_tracker_workbook": (BytesIO(workbook.getvalue()), "Week 4 Loading Tracker.xlsx")},
             content_type="multipart/form-data",
+            headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
         )
-        assert response.status_code == 302
+        assert response.status_code == 202
 
         with app.app_context():
             tracker_import = db.session.query(LoadingTrackerImport).one()
@@ -856,6 +886,38 @@ def test_loading_tracker_live_move_and_inventory_adjustment() -> None:
             db.engine.dispose()
 
 
+def test_loading_tracker_ignores_duplicate_weight_or_value_sections() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+                "LOADING_TRACKER_IMPORT_SYNC": True,
+            }
+        )
+
+        client = app.test_client()
+        workbook = build_loading_tracker_workbook_with_duplicate_sections()
+
+        response = client.post(
+            "/loading-tracker/import",
+            data={"loading_tracker_workbook": (BytesIO(workbook.getvalue()), "Week 4 Loading Tracker.xlsx")},
+            content_type="multipart/form-data",
+            headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
+        )
+        assert response.status_code == 202
+
+        with app.app_context():
+            tues = db.session.query(LoadingTrackerDay).filter_by(day_name="Tues").one()
+            assert float(tues.loaded_total) == 3.5
+            assert tues.active_store_count == 2
+            db.session.remove()
+            db.engine.dispose()
+            db.session.remove()
+            db.engine.dispose()
+
+
 def test_loading_tracker_counts_handoff_history_and_carry_forward() -> None:
     with TemporaryDirectory() as temp_dir:
         app = create_app(
@@ -863,6 +925,7 @@ def test_loading_tracker_counts_handoff_history_and_carry_forward() -> None:
                 "TESTING": True,
                 "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
                 "APP_TIMEZONE": "Africa/Lagos",
+                "LOADING_TRACKER_IMPORT_SYNC": True,
             }
         )
 
@@ -879,8 +942,9 @@ def test_loading_tracker_counts_handoff_history_and_carry_forward() -> None:
             "/loading-tracker/import",
             data={"loading_tracker_workbook": (BytesIO(build_loading_tracker_workbook().getvalue()), "Week 4 Loading Tracker.xlsx")},
             content_type="multipart/form-data",
+            headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
         )
-        assert response.status_code == 302
+        assert response.status_code == 202
 
         with app.app_context():
             tracker_import = db.session.query(LoadingTrackerImport).one()
@@ -903,7 +967,7 @@ def test_loading_tracker_counts_handoff_history_and_carry_forward() -> None:
         counts_html = counts.get_data(as_text=True)
         assert counts.status_code == 200
         assert "Start-of-day physical count saved for Mon" in counts_html
-        assert "Count status" in counts_html
+        assert "Planning pulse" in counts_html
 
         with app.app_context():
             assert db.session.query(LoadingTrackerDailyCount).filter_by(day_id=mon.id).count() == 2

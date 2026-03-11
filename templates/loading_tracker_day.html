@@ -6,12 +6,13 @@
   <section class="hero-band">
     <div>
       <p class="eyebrow">Loading Tracker · {{ day.day_name }}</p>
-      <h1>{{ day.day_name }} is now editable inside the planner.</h1>
-      <p class="page-copy">Start with the physical count, adjust live store rows here, move lines into Pending with a reason, and let LL plus Pack Breaker regenerate from the final day plan.</p>
+      <h1>{{ day.day_name }} planning workspace.</h1>
+      <p class="page-copy">Count first, adjust calmly, move only blocked lines into Pending, and let LL plus Pack Breaker rebuild from the final day plan.</p>
     </div>
     <div class="actions">
       <a class="secondary-button" href="{{ url_for('loading_tracker_import_view', import_id=tracker_import.id) }}">Back to week</a>
       <a class="secondary-button" href="{{ url_for('loading_tracker_day_counts_view', import_id=tracker_import.id, day_name=day.day_name) }}">Start-of-day count</a>
+      <a class="secondary-button" href="{{ url_for('loading_tracker_pending_view', import_id=tracker_import.id) }}">Pending</a>
       <a class="primary-button" href="{{ url_for('loading_tracker_day_new_row', import_id=tracker_import.id, day_name=day.day_name) }}">Add planning row</a>
       <form action="{{ url_for('loading_tracker_day_handoff', import_id=tracker_import.id, day_name=day.day_name) }}" method="post">
         <button class="primary-button" type="submit">Send to Delivery Note</button>
@@ -29,30 +30,25 @@
   </nav>
 
   <section class="stat-row">
-    <article class="glass-card stat-card">
-      <span class="panel-label">G2G at start</span>
+    <article class="glass-card stat-card tracker-metric-card">
+      <span class="panel-label">Available at start</span>
       <strong>{{ '{:,.2f}'.format(day_context.metrics.g2g_total) }}</strong>
-      <small>available before {{ day.day_name }} planning</small>
+      <small>usable stock before {{ day.day_name }} planning</small>
     </article>
-    <article class="glass-card stat-card">
-      <span class="panel-label">Planned out</span>
+    <article class="glass-card stat-card tracker-metric-card">
+      <span class="panel-label">Planned quantity</span>
       <strong>{{ '{:,.2f}'.format(day_context.metrics.loaded_total) }}</strong>
-      <small>live quantity in the day plan</small>
+      <small>approved packs across live store rows</small>
     </article>
-    <article class="glass-card stat-card">
-      <span class="panel-label">Remaining</span>
+    <article class="glass-card stat-card tracker-metric-card">
+      <span class="panel-label">Projected close</span>
       <strong>{{ '{:,.2f}'.format(day_context.metrics.remaining_total) }}</strong>
-      <small>after this day is loaded</small>
+      <small>remaining after this day is loaded</small>
     </article>
-    <article class="glass-card stat-card">
-      <span class="panel-label">Batch count</span>
-      <strong>{{ day_context.metrics.batch_count }}</strong>
-      <small>{{ day_context.metrics.active_store_count }} store rows</small>
-    </article>
-    <article class="glass-card stat-card">
-      <span class="panel-label">Count status</span>
-      <strong>{{ "Captured" if count_context.count_ready else "Pending" }}</strong>
-      <small>{{ count_context.variance_rows }} discrepancy row(s)</small>
+    <article class="glass-card stat-card tracker-metric-card tracker-metric-card-muted">
+      <span class="panel-label">Planning pulse</span>
+      <strong>{{ day_context.metrics.active_store_count }}</strong>
+      <small>{{ day_context.metrics.batch_count }} batches · {{ count_context.variance_rows }} discrepancy rows</small>
     </article>
   </section>
 

@@ -1666,13 +1666,13 @@ h3 {
 .sidebar-panel {
   display: grid;
   gap: 8px;
-  padding: 16px;
-  border-radius: 20px;
-  background: rgba(255, 255, 255, 0.05);
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.045);
 }
 
 .sidebar-panel-strong {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.075);
 }
 
 .sidebar-source {
@@ -1686,13 +1686,39 @@ h3 {
   line-height: 1.5;
 }
 
-.sidebar-stat-grid {
+.sidebar-status-list,
+.sidebar-pulse-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.sidebar-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(245, 251, 251, 0.82);
+}
+
+.sidebar-status-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.sidebar-status-row strong {
+  color: #ffffff;
+  font-size: 0.92rem;
+}
+
+.sidebar-pulse-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
-.sidebar-stat {
+.sidebar-pulse-grid > div {
   display: grid;
   gap: 8px;
   padding: 14px;
@@ -1700,7 +1726,7 @@ h3 {
   background: rgba(255, 255, 255, 0.05);
 }
 
-.sidebar-stat strong {
+.sidebar-pulse-grid strong {
   font-size: 1.55rem;
   line-height: 1;
 }
@@ -1774,9 +1800,9 @@ h3 {
 
 .glass-card {
   padding: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.58);
   border-radius: 28px;
-  background: var(--glass);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.9));
   box-shadow: var(--shadow-premium);
   backdrop-filter: blur(18px);
 }
@@ -1824,6 +1850,15 @@ h3 {
   margin-top: 10px;
   font-size: clamp(2rem, 3.2vw, 3rem);
   line-height: 1;
+}
+
+.tracker-metric-card strong {
+  font-size: clamp(1.8rem, 2.6vw, 2.8rem);
+  letter-spacing: -0.03em;
+}
+
+.tracker-metric-card-muted {
+  background: linear-gradient(180deg, rgba(247, 243, 233, 0.96), rgba(255, 255, 255, 0.92));
 }
 
 .module-hero {
@@ -2008,6 +2043,68 @@ h3 {
 .tracker-overview-row:last-child {
   border-bottom: 0;
   padding-bottom: 0;
+}
+
+.import-progress-card {
+  display: grid;
+  gap: 14px;
+  margin-top: 8px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(31, 97, 108, 0.12);
+  background: linear-gradient(180deg, rgba(18, 64, 72, 0.96), rgba(24, 85, 93, 0.95));
+  color: #f5fbfb;
+}
+
+.import-progress-card.is-hidden {
+  display: none;
+}
+
+.import-progress-card .eyebrow,
+.import-progress-card h3,
+.import-progress-card strong,
+.import-progress-card .subtle-note {
+  color: inherit;
+}
+
+.import-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.import-progress-bar {
+  position: relative;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.import-progress-bar span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  display: block;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #f2b24d, #ffdca3);
+  transition: width 0.35s ease;
+}
+
+.import-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+}
+
+.import-progress-meta strong {
+  font-size: 1.05rem;
+}
+
+.import-progress-meta span {
+  color: rgba(245, 251, 251, 0.76);
 }
 
 .day-canvas {
