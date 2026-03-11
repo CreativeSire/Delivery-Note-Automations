@@ -12,6 +12,7 @@ from models import (
     LoadingTrackerDay,
     LoadingTrackerEvent,
     LoadingTrackerImport,
+    LoadingTrackerImportJob,
     LoadingTrackerRow,
     Product,
     ProductAlias,
@@ -914,6 +915,54 @@ def test_loading_tracker_ignores_duplicate_weight_or_value_sections() -> None:
             assert tues.active_store_count == 2
             db.session.remove()
             db.engine.dispose()
+
+
+def test_loading_tracker_reset_clears_live_week_but_keeps_master_data() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+                "LOADING_TRACKER_IMPORT_SYNC": True,
+            }
+        )
+
+        client = app.test_client()
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(build_loading_tracker_uom_workbook().getvalue()), "uom.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        response = client.post(
+            "/loading-tracker/import",
+            data={"loading_tracker_workbook": (BytesIO(build_loading_tracker_workbook().getvalue()), "Week 4 Loading Tracker.xlsx")},
+            content_type="multipart/form-data",
+            headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
+        )
+        assert response.status_code == 202
+
+        with app.app_context():
+            assert db.session.query(LoadingTrackerImport).count() == 1
+            assert db.session.query(LoadingTrackerImportJob).count() == 1
+            assert db.session.query(LoadingTrackerRow).count() > 0
+            assert db.session.query(Product).count() == 2
+
+        response = client.post("/loading-tracker/reset", follow_redirects=True)
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Loading Tracker was cleared for a clean re-import" in html
+
+        with app.app_context():
+            assert db.session.query(LoadingTrackerImport).count() == 0
+            assert db.session.query(LoadingTrackerImportJob).count() == 0
+            assert db.session.query(LoadingTrackerDay).count() == 0
+            assert db.session.query(LoadingTrackerRow).count() == 0
+            assert db.session.query(LoadingTrackerEvent).count() == 0
+            assert db.session.query(Product).count() == 2
             db.session.remove()
             db.engine.dispose()
 

@@ -15,6 +15,9 @@
         <form action="{{ url_for('loading_tracker_carry_forward', import_id=tracker_import.id) }}" method="post">
           <button class="primary-button" type="submit">Start new week</button>
         </form>
+        <form action="{{ url_for('loading_tracker_reset') }}" method="post" onsubmit="return confirm('This will clear the live loading-tracker week and its planning history. Product master, UOM, aliases, and Delivery Note data will stay safe. Continue?');">
+          <button class="secondary-button danger-soft-button" type="submit">Reset live week</button>
+        </form>
       {% else %}
         <div class="hero-chip">Import workbook</div>
       {% endif %}
@@ -43,6 +46,19 @@
         <button class="primary-button" type="submit" data-submit-button>Import weekly tracker</button>
         <p class="subtle-note" data-submit-note hidden>We’re importing in the background. You can stay on this page while the week is being prepared.</p>
       </form>
+
+      {% if tracker_import %}
+        <section class="tracker-recovery-card">
+          <div>
+            <p class="eyebrow">Clean reset</p>
+            <h3>Need a clean re-import?</h3>
+            <p class="subtle-note">Clear only the live loading-tracker week and its planning history, then import the workbook again. UOM, products, aliases, and Delivery Note runs stay untouched.</p>
+          </div>
+          <form action="{{ url_for('loading_tracker_reset') }}" method="post" onsubmit="return confirm('Clear the live loading-tracker workspace now? Your master data and Delivery Note records will stay intact.');">
+            <button class="secondary-button danger-soft-button" type="submit">Clear tracker workspace</button>
+          </form>
+        </section>
+      {% endif %}
 
       <section
         class="import-progress-card {% if not active_import_job %}is-hidden{% endif %}"

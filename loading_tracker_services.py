@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import shutil
 import smtplib
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -217,6 +218,42 @@ def run_loading_tracker_import_job(job_id: str, workbook_path: str | Path, filen
         except OSError:
             pass
         db.session.remove()
+
+
+def reset_loading_tracker_workspace(instance_path: str | Path) -> dict[str, int]:
+    active_job = get_active_loading_tracker_import_job()
+    if active_job is not None:
+        raise LoadingTrackerError("Please wait for the current loading tracker import to finish before clearing the workspace.")
+
+    tracker_imports = list(
+        db.session.scalars(select(LoadingTrackerImport).order_by(LoadingTrackerImport.created_at.desc()))
+    )
+    import_jobs = list(
+        db.session.scalars(select(LoadingTrackerImportJob).order_by(LoadingTrackerImportJob.created_at.desc()))
+    )
+    summary = {
+        "imports": len(tracker_imports),
+        "days": sum(len(item.days) for item in tracker_imports),
+        "rows": sum(len(item.planning_rows) for item in tracker_imports),
+        "events": sum(len(item.events) for item in tracker_imports),
+        "jobs": len(import_jobs),
+    }
+
+    for job in import_jobs:
+        db.session.delete(job)
+    for tracker_import in tracker_imports:
+        db.session.delete(tracker_import)
+    db.session.commit()
+
+    upload_root = Path(instance_path) / "loading_tracker_jobs"
+    if upload_root.exists():
+        for child in upload_root.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+
+    return summary
 
 
 def build_loading_tracker_summary() -> LoadingTrackerSummary:

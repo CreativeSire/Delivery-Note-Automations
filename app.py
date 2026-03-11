@@ -33,6 +33,7 @@ from loading_tracker_services import (
     get_pending_reason_options,
     import_loading_tracker_workbook,
     move_loading_tracker_row,
+    reset_loading_tracker_workspace,
     run_loading_tracker_import_job,
     save_loading_tracker_day_counts,
     save_inventory_adjustment,
@@ -390,6 +391,22 @@ def create_app(test_config: dict | None = None) -> Flask:
             day_cards=day_cards,
             active_import_job=serialize_loading_tracker_import_job(active_import_job),
         )
+
+    @app.post("/loading-tracker/reset")
+    def loading_tracker_reset() -> str:
+        try:
+            cleared = reset_loading_tracker_workspace(app.instance_path)
+        except LoadingTrackerError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("loading_tracker_home"))
+
+        flash(
+            "Loading Tracker was cleared for a clean re-import. "
+            f"Removed {cleared['imports']} week import(s), {cleared['rows']} planning row(s), and {cleared['events']} event log(s). "
+            "Your product master, UOM source, aliases, and Delivery Note records stayed intact.",
+            "warning",
+        )
+        return redirect(url_for("loading_tracker_home"))
 
     @app.post("/loading-tracker/imports/<import_id>/carry-forward")
     def loading_tracker_carry_forward(import_id: str) -> str:
