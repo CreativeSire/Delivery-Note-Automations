@@ -21,15 +21,20 @@ from loading_tracker_services import (
     build_loading_tracker_pending_context,
     build_loading_tracker_row_editor,
     build_loading_tracker_summary,
+    build_loading_tracker_template_context,
+    build_loading_tracker_template_summary,
     carry_forward_loading_tracker_week,
+    capture_loading_tracker_template,
     create_loading_tracker_import_job,
     create_delivery_note_run_from_loading_day,
+    create_loading_tracker_week_from_template,
     export_loading_tracker_history_csv,
     get_active_loading_tracker_import_job,
     get_loading_tracker_day,
     get_loading_tracker_import,
     get_loading_tracker_import_job,
     get_loading_tracker_row,
+    get_loading_tracker_template,
     get_pending_reason_options,
     import_loading_tracker_workbook,
     move_loading_tracker_row,
@@ -93,6 +98,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         return {
             "app_summary": build_dashboard_summary(),
             "loading_summary": build_loading_tracker_summary(),
+            "loading_template_summary": build_loading_tracker_template_summary(),
         }
 
     @app.get("/")
@@ -381,6 +387,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         tracker_import = get_loading_tracker_import()
         overview = build_loading_tracker_overview(tracker_import)
         day_cards = tracker_import.days if tracker_import is not None else []
+        template = get_loading_tracker_template()
         active_import_job = get_loading_tracker_import_job(request.args.get("job")) if request.args.get("job") else None
         if active_import_job is None:
             active_import_job = get_active_loading_tracker_import_job()
@@ -389,6 +396,8 @@ def create_app(test_config: dict | None = None) -> Flask:
             tracker_import=tracker_import,
             overview=overview,
             day_cards=day_cards,
+            template=template,
+            template_context=build_loading_tracker_template_context(template),
             active_import_job=serialize_loading_tracker_import_job(active_import_job),
         )
 
@@ -425,13 +434,51 @@ def create_app(test_config: dict | None = None) -> Flask:
         if tracker_import is None:
             abort(404)
         overview = build_loading_tracker_overview(tracker_import)
+        template = get_loading_tracker_template()
         return render_template(
             "loading_tracker_home.html",
             tracker_import=tracker_import,
             overview=overview,
             day_cards=tracker_import.days,
+            template=template,
+            template_context=build_loading_tracker_template_context(template),
             active_import_job=serialize_loading_tracker_import_job(get_active_loading_tracker_import_job()),
         )
+
+    @app.post("/loading-tracker/template/capture")
+    def loading_tracker_capture_template() -> str:
+        source_import_id = request.form.get("source_import_id", "").strip() or None
+        template_name = request.form.get("template_name", "").strip() or None
+        try:
+            template = capture_loading_tracker_template(source_import_id, name=template_name)
+        except LoadingTrackerError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("loading_tracker_home"))
+
+        flash(
+            f"'{template.name}' is now the active backend planning template. Future weeks will use it by default.",
+            "success",
+        )
+        target_import_id = source_import_id or (get_loading_tracker_import().id if get_loading_tracker_import() else None)
+        if target_import_id:
+            return redirect(url_for("loading_tracker_import_view", import_id=target_import_id))
+        return redirect(url_for("loading_tracker_home"))
+
+    @app.post("/loading-tracker/template/start-week")
+    def loading_tracker_start_week_from_template() -> str:
+        template_id = request.form.get("template_id", "").strip() or None
+        source_import_id = request.form.get("source_import_id", "").strip() or None
+        try:
+            tracker_import = create_loading_tracker_week_from_template(template_id, source_import_id=source_import_id)
+        except LoadingTrackerError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("loading_tracker_home"))
+
+        flash(
+            "A new live week was created from the backend template. Remaining stock and pending lines were carried forward where available.",
+            "success",
+        )
+        return redirect(url_for("loading_tracker_import_view", import_id=tracker_import.id))
 
     @app.post("/loading-tracker/import")
     def upload_loading_tracker() -> str:

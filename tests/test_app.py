@@ -14,6 +14,7 @@ from models import (
     LoadingTrackerImport,
     LoadingTrackerImportJob,
     LoadingTrackerRow,
+    LoadingTrackerTemplate,
     Product,
     ProductAlias,
     UploadRun,
@@ -963,6 +964,78 @@ def test_loading_tracker_reset_clears_live_week_but_keeps_master_data() -> None:
             assert db.session.query(LoadingTrackerRow).count() == 0
             assert db.session.query(LoadingTrackerEvent).count() == 0
             assert db.session.query(Product).count() == 2
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_loading_tracker_template_can_seed_future_weeks_without_workbook() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+                "LOADING_TRACKER_IMPORT_SYNC": True,
+            }
+        )
+
+        client = app.test_client()
+
+        response = client.post(
+            "/loading-tracker/import",
+            data={"loading_tracker_workbook": (BytesIO(build_loading_tracker_workbook().getvalue()), "Week 4 Loading Tracker.xlsx")},
+            content_type="multipart/form-data",
+            headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
+        )
+        assert response.status_code == 202
+
+        with app.app_context():
+            source_import = db.session.query(LoadingTrackerImport).one()
+            source_import_id = source_import.id
+            source_pending_count = db.session.query(LoadingTrackerRow).filter_by(tracker_import_id=source_import_id, row_state="pending").count()
+            source_planned_count = db.session.query(LoadingTrackerRow).filter_by(tracker_import_id=source_import_id, row_state="planned").count()
+
+        capture = client.post(
+            "/loading-tracker/template/capture",
+            data={"source_import_id": source_import_id, "template_name": "Main planning template"},
+            follow_redirects=True,
+        )
+        assert capture.status_code == 200
+        assert "active backend planning template" in capture.get_data(as_text=True)
+
+        start_from_template = client.post(
+            "/loading-tracker/template/start-week",
+            data={"source_import_id": source_import_id},
+            follow_redirects=True,
+        )
+        assert start_from_template.status_code == 200
+        assert "created from the backend template" in start_from_template.get_data(as_text=True)
+
+        with app.app_context():
+            assert db.session.query(LoadingTrackerTemplate).count() == 1
+            imports = db.session.query(LoadingTrackerImport).order_by(LoadingTrackerImport.created_at.asc()).all()
+            assert len(imports) == 2
+            new_import = imports[-1]
+            assert len(new_import.days) == 2
+            assert db.session.query(LoadingTrackerRow).filter_by(tracker_import_id=new_import.id, row_state="planned").count() == source_planned_count
+            assert db.session.query(LoadingTrackerRow).filter_by(tracker_import_id=new_import.id, row_state="pending").count() == source_pending_count
+
+        reset = client.post("/loading-tracker/reset", follow_redirects=True)
+        assert reset.status_code == 200
+
+        restart = client.post(
+            "/loading-tracker/template/start-week",
+            follow_redirects=True,
+        )
+        assert restart.status_code == 200
+        assert "created from the backend template" in restart.get_data(as_text=True)
+
+        with app.app_context():
+            assert db.session.query(LoadingTrackerTemplate).count() == 1
+            assert db.session.query(LoadingTrackerImport).count() == 1
+            restarted_import = db.session.query(LoadingTrackerImport).one()
+            assert db.session.query(LoadingTrackerRow).filter_by(tracker_import_id=restarted_import.id, row_state="planned").count() == source_planned_count
+            assert db.session.query(LoadingTrackerRow).filter_by(tracker_import_id=restarted_import.id, row_state="pending").count() == 0
             db.session.remove()
             db.engine.dispose()
 

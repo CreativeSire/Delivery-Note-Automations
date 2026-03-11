@@ -153,6 +153,119 @@ class LoadingTrackerImportJob(db.Model):
     tracker_import = db.relationship("LoadingTrackerImport", back_populates="import_jobs")
 
 
+class LoadingTrackerTemplate(db.Model):
+    id = db.Column(db.String(32), primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    source_import_label = db.Column(db.String(255), nullable=True)
+    assumptions_sku_count = db.Column(db.Integer, nullable=False, default=0)
+    assumptions_store_count = db.Column(db.Integer, nullable=False, default=0)
+    fees_row_count = db.Column(db.Integer, nullable=False, default=0)
+    notes_count = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+    days = db.relationship(
+        "LoadingTrackerTemplateDay",
+        back_populates="template",
+        cascade="all, delete-orphan",
+        order_by="LoadingTrackerTemplateDay.day_order.asc()",
+    )
+    rows = db.relationship(
+        "LoadingTrackerTemplateRow",
+        back_populates="template",
+        cascade="all, delete-orphan",
+        order_by="LoadingTrackerTemplateRow.sort_order.asc(), LoadingTrackerTemplateRow.id.asc()",
+    )
+    inventory_items = db.relationship(
+        "LoadingTrackerTemplateInventoryItem",
+        back_populates="template",
+        cascade="all, delete-orphan",
+        order_by="LoadingTrackerTemplateInventoryItem.sort_order.asc(), LoadingTrackerTemplateInventoryItem.id.asc()",
+    )
+    fee_items = db.relationship(
+        "LoadingTrackerTemplateFeeItem",
+        back_populates="template",
+        cascade="all, delete-orphan",
+        order_by="LoadingTrackerTemplateFeeItem.id.asc()",
+    )
+
+
+class LoadingTrackerTemplateDay(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    template_id = db.Column(db.String(32), db.ForeignKey("loading_tracker_template.id"), nullable=False, index=True)
+    day_name = db.Column(db.String(32), nullable=False)
+    day_order = db.Column(db.Integer, nullable=False, default=0)
+
+    template = db.relationship("LoadingTrackerTemplate", back_populates="days")
+    rows = db.relationship(
+        "LoadingTrackerTemplateRow",
+        back_populates="day",
+        cascade="all, delete-orphan",
+        order_by="LoadingTrackerTemplateRow.sort_order.asc(), LoadingTrackerTemplateRow.id.asc()",
+    )
+
+
+class LoadingTrackerTemplateRow(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    template_id = db.Column(db.String(32), db.ForeignKey("loading_tracker_template.id"), nullable=False, index=True)
+    day_id = db.Column(db.Integer, db.ForeignKey("loading_tracker_template_day.id"), nullable=True, index=True)
+    row_state = db.Column(db.String(32), nullable=False, default="planned", index=True)
+    batch_name = db.Column(db.String(64), nullable=False, default="Load 1")
+    store_name = db.Column(db.String(255), nullable=False)
+    contact = db.Column(db.String(255), nullable=True)
+    lp = db.Column(db.String(255), nullable=True)
+    tier = db.Column(db.String(255), nullable=True)
+    region = db.Column(db.String(255), nullable=True)
+    delivery_date = db.Column(db.String(64), nullable=True)
+    reason_text = db.Column(db.String(255), nullable=True)
+    total_weight = db.Column(db.Numeric(14, 4), nullable=True)
+    total_value = db.Column(db.Numeric(14, 4), nullable=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+    template = db.relationship("LoadingTrackerTemplate", back_populates="rows")
+    day = db.relationship("LoadingTrackerTemplateDay", back_populates="rows")
+    items = db.relationship(
+        "LoadingTrackerTemplateRowItem",
+        back_populates="row",
+        cascade="all, delete-orphan",
+        order_by="LoadingTrackerTemplateRowItem.id.asc()",
+    )
+
+
+class LoadingTrackerTemplateRowItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    row_id = db.Column(db.Integer, db.ForeignKey("loading_tracker_template_row.id"), nullable=False, index=True)
+    sku_name = db.Column(db.String(255), nullable=False)
+    quantity = db.Column(db.Numeric(14, 4), nullable=False, default=0)
+
+    row = db.relationship("LoadingTrackerTemplateRow", back_populates="items")
+
+
+class LoadingTrackerTemplateInventoryItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    template_id = db.Column(db.String(32), db.ForeignKey("loading_tracker_template.id"), nullable=False, index=True)
+    sku_name = db.Column(db.String(255), nullable=False)
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+
+    template = db.relationship("LoadingTrackerTemplate", back_populates="inventory_items")
+
+
+class LoadingTrackerTemplateFeeItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    template_id = db.Column(db.String(32), db.ForeignKey("loading_tracker_template.id"), nullable=False, index=True)
+    brand_partner = db.Column(db.String(255), nullable=True)
+    sku_name = db.Column(db.String(255), nullable=False)
+    vatable_text = db.Column(db.String(64), nullable=True)
+    retail_delivery_value = db.Column(db.Numeric(14, 4), nullable=True)
+    payment_collection_value = db.Column(db.Numeric(14, 4), nullable=True)
+
+    template = db.relationship("LoadingTrackerTemplate", back_populates="fee_items")
+
+
 class LoadingTrackerDay(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     tracker_import_id = db.Column(db.String(32), db.ForeignKey("loading_tracker_import.id"), nullable=False, index=True)

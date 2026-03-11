@@ -6,20 +6,35 @@
   <section class="hero-band">
     <div>
       <p class="eyebrow">Loading Tracker</p>
-      <h1>Plan the week once, then run each day from a calmer live workspace.</h1>
-      <p class="page-copy">Bring in the weekly workbook, let the import finish in the background, and keep daily planning inside DALA OPERATIONS.</p>
+      <h1>Run the week from a saved planning template, not from workbook pressure.</h1>
+      <p class="page-copy">Keep one backend planning structure in DALA OPERATIONS, start future weeks from it, and use workbook import only when you truly need a reset or a structural refresh.</p>
     </div>
     <div class="actions">
+      {% if template %}
+        <form action="{{ url_for('loading_tracker_start_week_from_template') }}" method="post">
+          <input type="hidden" name="template_id" value="{{ template.id }}">
+          {% if tracker_import %}
+            <input type="hidden" name="source_import_id" value="{{ tracker_import.id }}">
+          {% endif %}
+          <button class="primary-button" type="submit">Start week from template</button>
+        </form>
+      {% endif %}
       {% if tracker_import %}
         <a class="secondary-button" href="{{ url_for('loading_tracker_history_view', import_id=tracker_import.id) }}">Open history</a>
-        <form action="{{ url_for('loading_tracker_carry_forward', import_id=tracker_import.id) }}" method="post">
-          <button class="primary-button" type="submit">Start new week</button>
+        <form action="{{ url_for('loading_tracker_capture_template') }}" method="post">
+          <input type="hidden" name="source_import_id" value="{{ tracker_import.id }}">
+          <button class="secondary-button" type="submit">{% if template %}Refresh template from live week{% else %}Save live week as template{% endif %}</button>
         </form>
         <form action="{{ url_for('loading_tracker_reset') }}" method="post" onsubmit="return confirm('This will clear the live loading-tracker week and its planning history. Product master, UOM, aliases, and Delivery Note data will stay safe. Continue?');">
           <button class="secondary-button danger-soft-button" type="submit">Reset live week</button>
         </form>
+        <form action="{{ url_for('loading_tracker_carry_forward', import_id=tracker_import.id) }}" method="post">
+          <button class="secondary-button" type="submit">Carry forward only</button>
+        </form>
       {% else %}
-        <div class="hero-chip">Import workbook</div>
+        {% if not template %}
+          <div class="hero-chip">Import workbook</div>
+        {% endif %}
       {% endif %}
     </div>
   </section>
@@ -28,8 +43,8 @@
     <article class="glass-card tracker-intake-card">
       <div class="module-head compact">
         <div>
-          <p class="eyebrow">Weekly import</p>
-          <h2>Bring in the planning workbook</h2>
+          <p class="eyebrow">Workbook fallback</p>
+          <h2>Bring in the planning workbook only when structure changes</h2>
         </div>
       </div>
       <form class="form-stack" action="{{ url_for('upload_loading_tracker') }}" method="post" enctype="multipart/form-data" id="loading-tracker-import-form">
@@ -91,31 +106,32 @@
     <article class="glass-card">
       <div class="module-head compact">
         <div>
-          <p class="eyebrow">Live overview</p>
-          <h2>{{ tracker_import.week_label if tracker_import else 'No tracker imported yet' }}</h2>
+          <p class="eyebrow">Backend template</p>
+          <h2>{{ template.name if template else 'No planning template yet' }}</h2>
         </div>
       </div>
-      {% if tracker_import %}
+      {% if template %}
         <div class="tracker-overview-stack">
           <div class="tracker-overview-row">
             <span class="metric-label">Planning days</span>
-            <strong>{{ overview.day_count }}</strong>
+            <strong>{{ template_context.day_count }}</strong>
           </div>
           <div class="tracker-overview-row">
-            <span class="metric-label">Live pending rows</span>
-            <strong>{{ overview.total_pending_rows }}</strong>
+            <span class="metric-label">Template rows</span>
+            <strong>{{ template_context.row_count }}</strong>
           </div>
           <div class="tracker-overview-row">
-            <span class="metric-label">Largest day</span>
-            <strong>{{ overview.largest_day_name or 'Not started' }}</strong>
+            <span class="metric-label">Inventory seed</span>
+            <strong>{{ template_context.inventory_seed_count }}</strong>
           </div>
           <div class="tracker-overview-row">
-            <span class="metric-label">History events</span>
-            <strong>{{ tracker_import.events|length }}</strong>
+            <span class="metric-label">Change policy</span>
+            <strong>{% if template_context.future_only %}Future weeks first{% else %}Live weeks too{% endif %}</strong>
           </div>
         </div>
+        <p class="subtle-note">Changes to the backend template are meant for future weeks by default. The current live week stays steady unless the planner chooses to rebuild or restart it.</p>
       {% else %}
-        <p class="empty-state">Import a workbook to open the live planning flow.</p>
+        <p class="empty-state">Import one good planning workbook, adjust it until the structure feels right, then save that live week as the backend template.</p>
       {% endif %}
     </article>
   </section>
@@ -197,6 +213,55 @@
             <strong>{{ tracker_import.events|length }} logged events</strong>
             <small>Download changes, pending reasons, counts, and handoff activity.</small>
           </a>
+        </div>
+      </article>
+    </section>
+  {% endif %}
+
+  {% if template %}
+    <section class="content-split">
+      <article class="glass-card">
+        <div class="module-head compact">
+          <div>
+            <p class="eyebrow">Template week map</p>
+            <h2>Future weeks will open like this</h2>
+          </div>
+        </div>
+        <div class="day-canvas">
+          {% for day in template_context.day_cards %}
+            <article class="day-stage day-stage-static">
+              <span class="day-stage-name">{{ day.day_name }}</span>
+              <strong>{{ day.row_count }} planned rows</strong>
+              <small>{{ day.sku_count }} SKUs across that day’s baseline plan</small>
+            </article>
+          {% endfor %}
+        </div>
+      </article>
+
+      <article class="glass-card">
+        <div class="module-head compact">
+          <div>
+            <p class="eyebrow">How it works</p>
+            <h2>Weekly workflow, simplified</h2>
+          </div>
+        </div>
+        <div class="future-grid">
+          <article class="future-card future-card-static">
+            <span class="panel-label">1. Build or refresh template</span>
+            <small>Use a good live week and save it as the active backend planning template.</small>
+          </article>
+          <article class="future-card future-card-static">
+            <span class="panel-label">2. Start week from template</span>
+            <small>Future weeks open from the saved structure instead of relying on a fresh workbook upload.</small>
+          </article>
+          <article class="future-card future-card-static">
+            <span class="panel-label">3. Carry forward what matters</span>
+            <small>Pending rows and remaining stock can still travel into the next week automatically.</small>
+          </article>
+          <article class="future-card future-card-static">
+            <span class="panel-label">4. Import only as fallback</span>
+            <small>Weekly workbook import stays available when the business structure changes sharply.</small>
+          </article>
         </div>
       </article>
     </section>

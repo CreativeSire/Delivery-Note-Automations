@@ -26,6 +26,12 @@ from models import (
     LoadingTrackerInventoryItem,
     LoadingTrackerRow,
     LoadingTrackerRowItem,
+    LoadingTrackerTemplate,
+    LoadingTrackerTemplateDay,
+    LoadingTrackerTemplateFeeItem,
+    LoadingTrackerTemplateInventoryItem,
+    LoadingTrackerTemplateRow,
+    LoadingTrackerTemplateRowItem,
     Product,
     ProductAlias,
     UploadLine,
@@ -98,6 +104,14 @@ class LoadingTrackerSummary:
     total_active_stores: int
     total_pending_stores: int
     total_fee_rows: int
+
+
+@dataclass
+class LoadingTrackerTemplateSummary:
+    active_template: LoadingTrackerTemplate | None
+    template_count: int
+    total_template_rows: int
+    total_template_skus: int
 
 
 def get_pending_reason_options() -> list[dict[str, str]]:
@@ -294,6 +308,270 @@ def build_loading_tracker_summary() -> LoadingTrackerSummary:
         total_pending_stores=total_pending_stores,
         total_fee_rows=total_fee_rows,
     )
+
+
+def get_loading_tracker_template(template_id: str | None = None) -> LoadingTrackerTemplate | None:
+    if template_id:
+        return db.session.get(LoadingTrackerTemplate, template_id)
+    return db.session.scalar(
+        select(LoadingTrackerTemplate)
+        .where(LoadingTrackerTemplate.is_active.is_(True))
+        .order_by(LoadingTrackerTemplate.updated_at.desc(), LoadingTrackerTemplate.created_at.desc())
+        .limit(1)
+    )
+
+
+def build_loading_tracker_template_summary() -> LoadingTrackerTemplateSummary:
+    active_template = get_loading_tracker_template()
+    return LoadingTrackerTemplateSummary(
+        active_template=active_template,
+        template_count=db.session.scalar(select(func.count(LoadingTrackerTemplate.id))) or 0,
+        total_template_rows=len(active_template.rows) if active_template is not None else 0,
+        total_template_skus=len(active_template.inventory_items) if active_template is not None else 0,
+    )
+
+
+def build_loading_tracker_template_context(template: LoadingTrackerTemplate | None) -> dict[str, Any]:
+    if template is None:
+        return {
+            "template": None,
+            "day_count": 0,
+            "row_count": 0,
+            "pending_baseline_count": 0,
+            "inventory_seed_count": 0,
+            "fee_row_count": 0,
+            "day_cards": [],
+            "future_only": True,
+        }
+
+    day_cards = []
+    for day in template.days:
+        rows = [row for row in day.rows if row.row_state == PLANNED_STATE]
+        day_cards.append(
+            {
+                "day_name": day.day_name,
+                "row_count": len(rows),
+                "store_count": len(rows),
+                "sku_count": len({item.sku_name for row in rows for item in row.items}),
+            }
+        )
+
+    return {
+        "template": template,
+        "day_count": len(template.days),
+        "row_count": len([row for row in template.rows if row.row_state == PLANNED_STATE]),
+        "pending_baseline_count": len([row for row in template.rows if row.row_state == PENDING_STATE]),
+        "inventory_seed_count": len(template.inventory_items),
+        "fee_row_count": len(template.fee_items),
+        "day_cards": day_cards,
+        "future_only": True,
+    }
+
+
+def capture_loading_tracker_template(source_import_id: str | None = None, *, name: str | None = None) -> LoadingTrackerTemplate:
+    source_import = get_loading_tracker_import(source_import_id)
+    if source_import is None:
+        raise LoadingTrackerError("There is no live loading week to save as a backend template yet.")
+
+    db.session.execute(update(LoadingTrackerTemplate).values(is_active=False))
+    template = LoadingTrackerTemplate(
+        id=uuid4().hex,
+        name=name or f"{source_import.week_label} template",
+        description="Future weeks use this structure by default. Current live weeks stay unchanged unless a planner chooses otherwise.",
+        is_active=True,
+        source_import_label=source_import.week_label,
+        assumptions_sku_count=source_import.assumptions_sku_count,
+        assumptions_store_count=source_import.assumptions_store_count,
+        fees_row_count=source_import.fees_row_count,
+        notes_count=source_import.notes_count,
+    )
+    db.session.add(template)
+    db.session.flush()
+
+    template_days: dict[str, LoadingTrackerTemplateDay] = {}
+    for day in source_import.days:
+        template_day = LoadingTrackerTemplateDay(
+            template_id=template.id,
+            day_name=day.day_name,
+            day_order=day.day_order,
+        )
+        db.session.add(template_day)
+        db.session.flush()
+        template_days[day.day_name] = template_day
+
+    for row in source_import.planning_rows:
+        if row.row_state != PLANNED_STATE or row.day is None:
+            continue
+        template_row = LoadingTrackerTemplateRow(
+            template_id=template.id,
+            day_id=template_days[row.day.day_name].id,
+            row_state=PLANNED_STATE,
+            batch_name=row.batch_name,
+            store_name=row.store_name,
+            contact=row.contact,
+            lp=row.lp,
+            tier=row.tier,
+            region=row.region,
+            delivery_date=row.delivery_date,
+            reason_text=row.reason_text,
+            total_weight=row.total_weight,
+            total_value=row.total_value,
+            sort_order=row.sort_order,
+        )
+        db.session.add(template_row)
+        db.session.flush()
+        for item in row.items:
+            db.session.add(
+                LoadingTrackerTemplateRowItem(
+                    row_id=template_row.id,
+                    sku_name=item.sku_name,
+                    quantity=item.quantity,
+                )
+            )
+
+    inventory_seed_names = {
+        item.sku_name
+        for item in source_import.inventory_items
+    } | {
+        item.sku_name
+        for row in source_import.planning_rows
+        if row.row_state == PLANNED_STATE
+        for item in row.items
+    }
+    for sort_order, sku_name in enumerate(sorted(inventory_seed_names), start=1):
+        db.session.add(
+            LoadingTrackerTemplateInventoryItem(
+                template_id=template.id,
+                sku_name=sku_name,
+                sort_order=sort_order,
+            )
+        )
+
+    for fee_item in source_import.fee_items:
+        db.session.add(
+            LoadingTrackerTemplateFeeItem(
+                template_id=template.id,
+                brand_partner=fee_item.brand_partner,
+                sku_name=fee_item.sku_name,
+                vatable_text=fee_item.vatable_text,
+                retail_delivery_value=fee_item.retail_delivery_value,
+                payment_collection_value=fee_item.payment_collection_value,
+            )
+        )
+
+    db.session.commit()
+    return template
+
+
+def create_loading_tracker_week_from_template(
+    template_id: str | None = None,
+    *,
+    source_import_id: str | None = None,
+    week_label: str | None = None,
+) -> LoadingTrackerImport:
+    template = get_loading_tracker_template(template_id)
+    if template is None:
+        raise LoadingTrackerError("There is no backend planning template yet. Save a live week as template first.")
+
+    source_import = get_loading_tracker_import(source_import_id)
+    remaining_map = _closing_inventory_by_import(source_import) if source_import is not None else {}
+    pending_rows = [row for row in source_import.planning_rows if row.row_state == PENDING_STATE] if source_import else []
+
+    tracker_import = LoadingTrackerImport(
+        id=uuid4().hex,
+        filename=f"Template week - {template.name}",
+        week_label=week_label or f"Week of {datetime.now().date()}",
+        assumptions_sku_count=template.assumptions_sku_count,
+        assumptions_store_count=template.assumptions_store_count,
+        opening_g2g_total=_decimal_or_none(sum(remaining_map.values())),
+        opening_remaining_total=_decimal_or_none(sum(remaining_map.values())),
+        fees_row_count=template.fees_row_count,
+        notes_count=template.notes_count,
+    )
+    db.session.add(tracker_import)
+    db.session.flush()
+
+    day_lookup: dict[str, LoadingTrackerDay] = {}
+    for template_day in template.days:
+        day_record = LoadingTrackerDay(
+            tracker_import_id=tracker_import.id,
+            day_name=template_day.day_name,
+            day_order=template_day.day_order,
+        )
+        db.session.add(day_record)
+        db.session.flush()
+        day_lookup[template_day.day_name] = day_record
+
+    inventory_seed_names = {item.sku_name for item in template.inventory_items} | set(remaining_map)
+    if not inventory_seed_names:
+        inventory_seed_names = {product.sku_name for product in db.session.query(Product).filter(Product.is_active.is_(True))}
+    for sort_order, sku_name in enumerate(sorted(inventory_seed_names), start=1):
+        qty = round(remaining_map.get(sku_name, 0.0), 4)
+        db.session.add(
+            LoadingTrackerInventoryItem(
+                tracker_import_id=tracker_import.id,
+                sku_name=sku_name,
+                opening_g2g_qty=_decimal_or_none(qty) or Decimal("0"),
+                opening_remaining_qty=_decimal_or_none(qty) or Decimal("0"),
+                added_qty=Decimal("0"),
+                sort_order=sort_order,
+            )
+        )
+
+    for fee_item in template.fee_items:
+        db.session.add(
+            LoadingTrackerFeeItem(
+                tracker_import_id=tracker_import.id,
+                brand_partner=fee_item.brand_partner,
+                sku_name=fee_item.sku_name,
+                vatable_text=fee_item.vatable_text,
+                retail_delivery_value=fee_item.retail_delivery_value,
+                payment_collection_value=fee_item.payment_collection_value,
+            )
+        )
+
+    day_sort_orders: dict[str, int] = {day_name: 0 for day_name in day_lookup}
+    for template_row in template.rows:
+        if template_row.row_state != PLANNED_STATE or template_row.day is None:
+            continue
+        row_data = _serialize_template_row(template_row)
+        day_name = template_row.day.day_name
+        day_sort_orders[day_name] += 1
+        _save_row_record(
+            tracker_import=tracker_import,
+            row_data=row_data,
+            row_state=PLANNED_STATE,
+            day=day_lookup[day_name],
+            sort_order=day_sort_orders[day_name],
+            source_kind="template",
+        )
+
+    for sort_order, row in enumerate(pending_rows, start=1):
+        _save_row_record(
+            tracker_import=tracker_import,
+            row_data=_serialize_row(row),
+            row_state=PENDING_STATE,
+            day=None,
+            sort_order=sort_order,
+            source_kind="carry_forward",
+            reason_text=row.reason_text,
+        )
+
+    _log_tracker_event(
+        tracker_import=tracker_import,
+        day=None,
+        row=None,
+        event_type="started_week_from_template",
+        entity_name=template.name,
+        details={
+            "template_id": template.id,
+            "template_name": template.name,
+            "carried_pending_rows": len(pending_rows),
+            "carried_inventory_skus": len(remaining_map),
+        },
+    )
+    db.session.commit()
+    return tracker_import
 
 
 def import_loading_tracker_workbook(
@@ -1247,6 +1525,31 @@ def _serialize_row(row: LoadingTrackerRow) -> dict[str, Any]:
     return {
         "id": row.id,
         "row_state": row.row_state,
+        "batch_name": row.batch_name or "Unassigned",
+        "store_name": row.store_name,
+        "contact": row.contact or "",
+        "lp": row.lp or "",
+        "tier": row.tier or "",
+        "region": row.region or "",
+        "delivery_date": row.delivery_date or "",
+        "reason_text": row.reason_text or "",
+        "weight": round(_float_value(row.total_weight), 2),
+        "value": round(_float_value(row.total_value), 2),
+        "total_quantity": round(sum(item["quantity"] for item in items), 2),
+        "product_count": len(items),
+        "items": items,
+        "top_items": items[:5],
+    }
+
+
+def _serialize_template_row(row: LoadingTrackerTemplateRow) -> dict[str, Any]:
+    items = [
+        {"sku": item.sku_name, "quantity": round(_float_value(item.quantity), 2)}
+        for item in row.items
+        if _float_value(item.quantity) > 0
+    ]
+    items.sort(key=lambda item: (-item["quantity"], item["sku"]))
+    return {
         "batch_name": row.batch_name or "Unassigned",
         "store_name": row.store_name,
         "contact": row.contact or "",

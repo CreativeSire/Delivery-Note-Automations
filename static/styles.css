@@ -2012,6 +2012,16 @@ h3 {
   background: rgba(20, 52, 60, 0.07);
 }
 
+.future-card-static,
+.day-stage-static {
+  cursor: default;
+}
+
+.future-card-static:hover,
+.day-stage-static:hover {
+  transform: none;
+}
+
 .pipeline-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
