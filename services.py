@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -99,6 +100,14 @@ class RunSummary:
     ignored_groups: list[IgnoredGroup]
     ready_lines: int
     ignored_lines: int
+
+
+@dataclass
+class IgnoredHistorySummary:
+    run: UploadRun
+    ignored_groups: list[IgnoredGroup]
+    ignored_lines: int
+    ignored_runs_for_sku: list[dict[str, Any]]
 
 
 def build_dashboard_summary() -> DashboardSummary:
@@ -394,19 +403,7 @@ def build_run_summary(run_id: str) -> RunSummary | None:
     for line in ignored_line_items:
         ignored_grouped.setdefault(line.source_sku, []).append(line)
 
-    ignored_groups = []
-    for source_sku, lines in ignored_grouped.items():
-        ignored_groups.append(
-            IgnoredGroup(
-                source_sku=source_sku,
-                occurrences=len(lines),
-                order_numbers=sorted({line.order_number for line in lines}),
-                supermarkets=sorted({line.supermarket_name for line in lines}),
-                reason="Inactive product",
-            )
-        )
-
-    ignored_groups.sort(key=lambda item: item.source_sku)
+    ignored_groups = _build_ignored_groups(ignored_grouped)
     ready_lines = db.session.scalar(
         select(func.count(UploadLine.id)).where(UploadLine.run_id == run_id, UploadLine.status == "ready")
     ) or 0
@@ -419,6 +416,56 @@ def build_run_summary(run_id: str) -> RunSummary | None:
         ignored_groups=ignored_groups,
         ready_lines=ready_lines,
         ignored_lines=ignored_lines,
+    )
+
+
+def build_ignored_history_summary(run_id: str) -> IgnoredHistorySummary | None:
+    run = db.session.get(UploadRun, run_id)
+    if run is None:
+        return None
+
+    ignored_line_items = list(
+        db.session.scalars(
+            select(UploadLine).where(UploadLine.run_id == run_id, UploadLine.status == "ignored")
+        )
+    )
+    ignored_grouped: dict[str, list[UploadLine]] = {}
+    for line in ignored_line_items:
+        ignored_grouped.setdefault(line.source_sku, []).append(line)
+    ignored_groups = _build_ignored_groups(ignored_grouped)
+
+    ignored_source_skus = list(ignored_grouped.keys())
+    ignored_runs_for_sku: list[dict[str, Any]] = []
+    if ignored_source_skus:
+        ignored_lines_history = list(
+            db.session.scalars(
+                select(UploadLine)
+                .join(UploadRun, UploadRun.id == UploadLine.run_id)
+                .where(UploadLine.status == "ignored", UploadLine.source_sku.in_(ignored_source_skus))
+                .order_by(UploadRun.created_at.desc(), UploadLine.id.asc())
+            )
+        )
+        by_sku_counter = Counter(line.source_sku for line in ignored_lines_history)
+        by_run_counter = Counter(line.run_id for line in ignored_lines_history)
+        for line in ignored_lines_history:
+            ignored_runs_for_sku.append(
+                {
+                    "source_sku": line.source_sku,
+                    "run_id": line.run_id,
+                    "run_filename": line.run.original_filename if line.run else "",
+                    "invoice_date": line.run.invoice_date if line.run else "",
+                    "supermarket_name": line.supermarket_name,
+                    "order_number": line.order_number,
+                    "occurrences_for_sku": by_sku_counter[line.source_sku],
+                    "occurrences_for_run": by_run_counter[line.run_id],
+                }
+            )
+
+    return IgnoredHistorySummary(
+        run=run,
+        ignored_groups=ignored_groups,
+        ignored_lines=len(ignored_line_items),
+        ignored_runs_for_sku=ignored_runs_for_sku,
     )
 
 
@@ -577,6 +624,93 @@ def export_run_to_xls(run_id: str) -> tuple[str, bytes]:
     return _build_export_filename(run), stream.getvalue()
 
 
+def export_ignored_history_to_xls(run_id: str) -> tuple[str, bytes]:
+    summary = build_ignored_history_summary(run_id)
+    if summary is None:
+        raise WorkbookShapeError("This upload run could not be found.")
+    if not summary.ignored_groups:
+        raise WorkbookShapeError("There are no ignored inactive items in this run yet.")
+
+    workbook = xlwt.Workbook()
+    sheet = workbook.add_sheet("Ignored Items")
+
+    header_style = xlwt.easyxf(
+        "font: bold on, height 220;"
+        "pattern: pattern solid, fore_colour ocean_blue;"
+        "align: horiz center;"
+        "borders: left thin, right thin, top thin, bottom thin;"
+    )
+    text_style = xlwt.easyxf("borders: left thin, right thin, top thin, bottom thin;")
+    number_style = xlwt.easyxf(
+        "borders: left thin, right thin, top thin, bottom thin;",
+        num_format_str="0",
+    )
+
+    summary_headers = [
+        "Source SKU",
+        "Occurrences In This Run",
+        "Stores",
+        "Order Numbers",
+        "Reason",
+        "Run File",
+        "Invoice Date",
+    ]
+    for col_index, header in enumerate(summary_headers):
+        sheet.write(0, col_index, header, header_style)
+        sheet.col(col_index).width = min(max(len(header) + 4, 16) * 256, 42 * 256)
+
+    for row_index, group in enumerate(summary.ignored_groups, start=1):
+        row = [
+            group.source_sku,
+            group.occurrences,
+            ", ".join(group.supermarkets),
+            ", ".join(group.order_numbers),
+            group.reason,
+            summary.run.original_filename,
+            summary.run.invoice_date,
+        ]
+        for col_index, value in enumerate(row):
+            style = number_style if isinstance(value, int) else text_style
+            sheet.write(row_index, col_index, value, style)
+
+    history_start = len(summary.ignored_groups) + 3
+    history_headers = [
+        "Source SKU",
+        "Run Id",
+        "Run File",
+        "Invoice Date",
+        "Store",
+        "Order Number",
+        "SKU Ignore Count",
+        "Run Ignore Count",
+    ]
+    for col_index, header in enumerate(history_headers):
+        sheet.write(history_start, col_index, header, header_style)
+
+    for offset, item in enumerate(summary.ignored_runs_for_sku, start=1):
+        row_index = history_start + offset
+        row = [
+            item["source_sku"],
+            item["run_id"],
+            item["run_filename"],
+            item["invoice_date"],
+            item["supermarket_name"],
+            item["order_number"],
+            item["occurrences_for_sku"],
+            item["occurrences_for_run"],
+        ]
+        for col_index, value in enumerate(row):
+            style = number_style if isinstance(value, int) else text_style
+            sheet.write(row_index, col_index, value, style)
+
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    run_label = _clean_filename_part(Path(summary.run.original_filename or "tracker.xlsx").stem, "Tracker")
+    filename = f"DALA Ignored Items - {summary.run.invoice_date} - {run_label}.xls"
+    return filename, stream.getvalue()
+
+
 def resolve_product_match(source_sku: str, products: list[Product], aliases: list[ProductAlias]) -> ProductMatch | None:
     exact_lookup = {product.sku_name: product for product in products}
     if source_sku in exact_lookup:
@@ -648,6 +782,22 @@ def _clean_filename_part(value: str, fallback: str) -> str:
     if not cleaned:
         return fallback
     return cleaned[:90].rstrip(" .-")
+
+
+def _build_ignored_groups(grouped_lines: dict[str, list[UploadLine]]) -> list[IgnoredGroup]:
+    ignored_groups = []
+    for source_sku, lines in grouped_lines.items():
+        ignored_groups.append(
+            IgnoredGroup(
+                source_sku=source_sku,
+                occurrences=len(lines),
+                order_numbers=sorted({line.order_number for line in lines}),
+                supermarkets=sorted({line.supermarket_name for line in lines}),
+                reason="Inactive product",
+            )
+        )
+    ignored_groups.sort(key=lambda item: item.source_sku)
+    return ignored_groups
 
 
 def apply_product_to_line(line: UploadLine, product: Product, match_method: str) -> None:

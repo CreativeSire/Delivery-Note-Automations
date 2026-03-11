@@ -2337,6 +2337,12 @@ h3 {
   margin: 0;
 }
 
+.subtle-note {
+  margin: 1rem 0 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
 .inline-pending-form {
   display: grid;
   gap: 10px;

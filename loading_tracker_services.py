@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import csv
+import smtplib
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from email.message import EmailMessage
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from flask import current_app
 from openpyxl import load_workbook
 from sqlalchemy import func, select
 
@@ -729,6 +732,18 @@ def save_loading_tracker_day_counts(import_id: str, day_name: str, form_data: di
             "variance_rows": len([sku for sku in all_skus if abs(incoming.get(sku, expected_start.get(sku, 0.0)) - expected_start.get(sku, 0.0)) > 0.0001]),
         },
     )
+    discrepancy_rows = [
+        {
+            "sku": sku_name,
+            "expected_qty": round(expected_start.get(sku_name, 0.0), 4),
+            "physical_qty": round(incoming.get(sku_name, expected_start.get(sku_name, 0.0)), 4),
+            "discrepancy_qty": round(incoming.get(sku_name, expected_start.get(sku_name, 0.0)) - expected_start.get(sku_name, 0.0), 4),
+        }
+        for sku_name in all_skus
+        if incoming.get(sku_name, expected_start.get(sku_name, 0.0)) < expected_start.get(sku_name, 0.0)
+    ]
+    if discrepancy_rows:
+        _log_inventory_discrepancy_alert(day, discrepancy_rows)
     db.session.commit()
     return day
 
@@ -1275,6 +1290,73 @@ def _log_tracker_event(
             details_json=details or {},
         )
     )
+
+
+def _log_inventory_discrepancy_alert(day: LoadingTrackerDay, discrepancy_rows: list[dict[str, float]]) -> None:
+    recipients = [
+        email.strip()
+        for email in str(current_app.config.get("ALERT_EMAILS", "")).split(",")
+        if email.strip()
+    ]
+    details = {
+        "recipient_count": len(recipients),
+        "recipients": recipients,
+        "variance_count": len(discrepancy_rows),
+        "items": discrepancy_rows[:20],
+    }
+    alert_status = "not_configured"
+    if recipients:
+        alert_status = _send_inventory_discrepancy_email(day, recipients, discrepancy_rows)
+    details["delivery_status"] = alert_status
+    _log_tracker_event(
+        tracker_import=day.tracker_import,
+        day=day,
+        row=None,
+        event_type="inventory_discrepancy_alert",
+        entity_name=day.day_name,
+        details=details,
+    )
+
+
+def _send_inventory_discrepancy_email(
+    day: LoadingTrackerDay,
+    recipients: list[str],
+    discrepancy_rows: list[dict[str, float]],
+) -> str:
+    host = str(current_app.config.get("MAIL_HOST", "")).strip()
+    port = int(current_app.config.get("MAIL_PORT", 587) or 587)
+    username = str(current_app.config.get("MAIL_USERNAME", "")).strip()
+    password = str(current_app.config.get("MAIL_PASSWORD", "")).strip()
+    sender = str(current_app.config.get("MAIL_FROM", username or "noreply@dala-operations.local")).strip()
+    use_tls = bool(current_app.config.get("MAIL_USE_TLS", True))
+    if not host:
+        return "not_configured"
+
+    body_lines = [
+        f"Inventory discrepancies were recorded for {day.day_name}.",
+        "",
+        "Items below expected stock:",
+    ]
+    for row in discrepancy_rows:
+        body_lines.append(
+            f"- {row['sku']}: expected {row['expected_qty']}, counted {row['physical_qty']}, delta {row['discrepancy_qty']}"
+        )
+    message = EmailMessage()
+    message["Subject"] = f"DALA OPERATIONS inventory discrepancy alert - {day.day_name}"
+    message["From"] = sender
+    message["To"] = ", ".join(recipients)
+    message.set_content("\n".join(body_lines))
+
+    try:
+        with smtplib.SMTP(host, port, timeout=15) as smtp:
+            if use_tls:
+                smtp.starttls()
+            if username:
+                smtp.login(username, password)
+            smtp.send_message(message)
+    except Exception:
+        return "failed"
+    return "sent"
 
 
 def _next_sort_order(

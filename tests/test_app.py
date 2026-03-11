@@ -702,6 +702,12 @@ def test_review_can_mark_source_sku_inactive_directly() -> None:
         assert "Inactive items skipped" in html
         assert "SKU Vanila" in html
 
+        ignored_download = client.get(f"/runs/{run_id}/ignored/download")
+        assert ignored_download.status_code == 200
+        assert ignored_download.mimetype == "application/vnd.ms-excel"
+        assert "DALA Ignored Items" in ignored_download.headers["Content-Disposition"]
+        assert ignored_download.data
+
         with app.app_context():
             inactive_product = db.session.query(Product).filter_by(sku_name="SKU Vanila").one()
             run = db.session.get(UploadRun, run_id)
@@ -901,6 +907,13 @@ def test_loading_tracker_counts_handoff_history_and_carry_forward() -> None:
 
         with app.app_context():
             assert db.session.query(LoadingTrackerDailyCount).filter_by(day_id=mon.id).count() == 2
+            discrepancy_event = (
+                db.session.query(LoadingTrackerEvent)
+                .filter_by(day_id=mon.id, event_type="inventory_discrepancy_alert")
+                .one()
+            )
+            assert discrepancy_event.details_json["delivery_status"] == "not_configured"
+            assert discrepancy_event.details_json["variance_count"] == 2
 
         invalid_pending = client.post(
             f"/loading-tracker/imports/{import_id}/rows/{row_id}/move",

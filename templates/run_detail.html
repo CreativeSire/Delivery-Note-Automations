@@ -24,6 +24,9 @@
       {% else %}
         <a class="primary-button" href="{{ url_for('download_run', run_id=summary.run.id) }}">Download XLS</a>
       {% endif %}
+      {% if summary.ignored_groups %}
+        <a class="secondary-button" href="{{ url_for('download_ignored_history', run_id=summary.run.id) }}">Download Ignored Items</a>
+      {% endif %}
       <a class="secondary-button" href="{{ url_for('delivery_note_home') }}">Back to Delivery Note</a>
     </div>
   </section>
@@ -80,6 +83,9 @@
           </div>
         {% endfor %}
       </div>
+      {% if ignored_history and ignored_history.ignored_runs_for_sku %}
+        <p class="subtle-note">Ignored-item history is now downloadable with run, store, and order trace details.</p>
+      {% endif %}
     </section>
   {% endif %}
 {% endblock %}

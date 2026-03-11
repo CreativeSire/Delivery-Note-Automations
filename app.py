@@ -39,8 +39,10 @@ from services import (
     apply_review_decisions,
     bootstrap_seed_uom_if_empty,
     build_dashboard_summary,
+    build_ignored_history_summary,
     build_run_summary,
     create_tracker_run,
+    export_ignored_history_to_xls,
     export_run_to_xls,
     import_uom_workbook,
     mark_source_sku_inactive,
@@ -58,6 +60,13 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.config.update(
         SECRET_KEY=os.environ.get("SECRET_KEY", secrets.token_hex(24)),
         APP_TIMEZONE=APP_TIMEZONE,
+        ALERT_EMAILS=os.environ.get("ALERT_EMAILS", ""),
+        MAIL_HOST=os.environ.get("MAIL_HOST", ""),
+        MAIL_PORT=int(os.environ.get("MAIL_PORT", "587")),
+        MAIL_USERNAME=os.environ.get("MAIL_USERNAME", ""),
+        MAIL_PASSWORD=os.environ.get("MAIL_PASSWORD", ""),
+        MAIL_FROM=os.environ.get("MAIL_FROM", ""),
+        MAIL_USE_TLS=os.environ.get("MAIL_USE_TLS", "true").lower() != "false",
         SQLALCHEMY_DATABASE_URI=_database_uri(app.instance_path),
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
     )
@@ -273,7 +282,8 @@ def create_app(test_config: dict | None = None) -> Flask:
         summary = build_run_summary(run_id)
         if summary is None:
             abort(404)
-        return render_template("run_detail.html", summary=summary)
+        ignored_history = build_ignored_history_summary(run_id)
+        return render_template("run_detail.html", summary=summary, ignored_history=ignored_history)
 
     @app.get("/runs/<run_id>/review")
     def review_run(run_id: str) -> str:
@@ -331,6 +341,21 @@ def create_app(test_config: dict | None = None) -> Flask:
     def download_run(run_id: str):
         try:
             filename, payload = export_run_to_xls(run_id)
+        except WorkbookShapeError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("view_run", run_id=run_id))
+
+        return send_file(
+            BytesIO(payload),
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.ms-excel",
+        )
+
+    @app.get("/runs/<run_id>/ignored/download")
+    def download_ignored_history(run_id: str):
+        try:
+            filename, payload = export_ignored_history_to_xls(run_id)
         except WorkbookShapeError as exc:
             flash(str(exc), "error")
             return redirect(url_for("view_run", run_id=run_id))
