@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from openpyxl import Workbook
 
 from app import _database_uri, create_app
-from models import Product, ProductAlias, UploadRun, db
+from models import LoadingTrackerDay, LoadingTrackerImport, Product, ProductAlias, UploadRun, db
 from services import bootstrap_seed_uom_if_empty
 
 
@@ -56,6 +56,152 @@ def build_item_list_export() -> BytesIO:
         "3\tRetired SKU Gamma\t6\t\t1200\tInactive\n"
     )
     return BytesIO(payload.encode("utf-8"))
+
+
+def build_loading_tracker_workbook() -> BytesIO:
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+
+    def populate_day_sheet(sheet_name: str, store_name: str, qty_a: float, qty_b: float) -> None:
+        sheet = workbook.create_sheet(sheet_name)
+        sheet.cell(5, 9, "Expected in G2G For Loading")
+        sheet.cell(5, 10, 10)
+        sheet.cell(5, 11, 4)
+        sheet.cell(6, 9, "TOTAL LOADED OUT FOR DELIVERY")
+        sheet.cell(6, 10, qty_a)
+        sheet.cell(6, 11, qty_b)
+        sheet.cell(7, 9, "Remaining Inventory After Loading")
+        sheet.cell(7, 10, 10 - qty_a)
+        sheet.cell(7, 11, 4 - qty_b)
+        sheet.cell(21, 9, "Expected in Store For Loading")
+        sheet.cell(21, 10, 10)
+        sheet.cell(21, 11, 4)
+        sheet.cell(23, 1, "Load 1")
+        sheet.cell(24, 2, "Contact")
+        sheet.cell(24, 3, "LP")
+        sheet.cell(24, 4, "Tier")
+        sheet.cell(24, 5, "Region")
+        sheet.cell(24, 6, "Weight")
+        sheet.cell(24, 7, "Value")
+        sheet.cell(24, 8, "Date")
+        sheet.cell(24, 9, "LOAD FOR EXTERNAL DELIVERY")
+        sheet.cell(24, 10, "SKU Alpha")
+        sheet.cell(24, 11, "SKU Beta")
+        sheet.cell(25, 2, "Area One")
+        sheet.cell(25, 3, "Mr Tester")
+        sheet.cell(25, 4, "Tier-1")
+        sheet.cell(25, 5, "Reg 1")
+        sheet.cell(25, 6, 5.5)
+        sheet.cell(25, 7, 25000)
+        sheet.cell(25, 9, store_name)
+        sheet.cell(25, 10, qty_a)
+        sheet.cell(25, 11, qty_b)
+        sheet.cell(65, 1, "Load 2")
+        sheet.cell(66, 2, "Contact")
+        sheet.cell(66, 3, "LP")
+        sheet.cell(66, 4, "Tier")
+        sheet.cell(66, 5, "Region")
+        sheet.cell(66, 6, "Weight")
+        sheet.cell(66, 7, "Value")
+        sheet.cell(66, 8, "Date")
+        sheet.cell(66, 9, "LOAD FOR EXTERNAL DELIVERY")
+        sheet.cell(67, 2, "Area Two")
+        sheet.cell(67, 3, "Mr Runner")
+        sheet.cell(67, 4, "Tier-2")
+        sheet.cell(67, 5, "Reg 2")
+        sheet.cell(67, 6, 2.0)
+        sheet.cell(67, 7, 11000)
+        sheet.cell(67, 9, "Second Store")
+        sheet.cell(67, 10, 1)
+        sheet.cell(67, 11, 0)
+
+    def populate_load_list(sheet_name: str, qty_a: float, qty_b: float) -> None:
+        sheet = workbook.create_sheet(sheet_name)
+        sheet.cell(1, 1, sheet_name)
+        sheet.cell(2, 1, "SKU")
+        sheet.cell(2, 2, "Load 1")
+        sheet.cell(2, 3, "Load 2")
+        sheet.cell(2, 4, "Load 3")
+        sheet.cell(2, 5, "Load 4")
+        sheet.cell(2, 6, "TOTAL")
+        sheet.cell(3, 1, "SKU Alpha")
+        sheet.cell(3, 2, qty_a)
+        sheet.cell(3, 6, qty_a)
+        sheet.cell(4, 1, "SKU Beta")
+        sheet.cell(4, 3, qty_b)
+        sheet.cell(4, 6, qty_b)
+
+    workbook.create_sheet("Pending Orders")
+    pending = workbook["Pending Orders"]
+    pending.cell(5, 9, "Expected in G2G For Loading")
+    pending.cell(5, 10, 7)
+    pending.cell(6, 9, "TOTAL LOADED OUT FOR DELIVERY")
+    pending.cell(6, 10, 2)
+    pending.cell(7, 9, "Remaining Inventory After Loading")
+    pending.cell(7, 10, 5)
+    pending.cell(23, 1, "Load 1")
+    pending.cell(24, 2, "Contact")
+    pending.cell(24, 5, "Region")
+    pending.cell(24, 7, "Value")
+    pending.cell(24, 9, "LOAD FOR EXTERNAL DELIVERY")
+    pending.cell(24, 10, "SKU Alpha")
+    pending.cell(25, 2, "Pending Area")
+    pending.cell(25, 5, "Reg 8")
+    pending.cell(25, 7, 15000)
+    pending.cell(25, 9, "Pending Store")
+    pending.cell(25, 10, 2)
+
+    workbook.create_sheet("Opening Inventory")
+    opening = workbook["Opening Inventory"]
+    opening.cell(5, 9, "Expected in G2G For Loading")
+    opening.cell(5, 10, 12)
+    opening.cell(5, 11, 4)
+    opening.cell(7, 9, "Remaining Inventory After Loading")
+    opening.cell(7, 10, 10)
+    opening.cell(7, 11, 4)
+    opening.cell(2, 10, "SKU Alpha")
+    opening.cell(2, 11, "SKU Beta")
+
+    populate_day_sheet("Mon", "Store One", 2, 1)
+    populate_day_sheet("Tues", "Store Two", 3, 0.5)
+    populate_load_list("LL Mon", 3, 1)
+    populate_load_list("LL Tue", 4, 0.5)
+
+    assumptions = workbook.create_sheet("Assumptions")
+    assumptions.append(
+        ["Company", "SKU", "Units", "Pack Weight (kg)", "Value", "Min Inventory", "Retail Store", "Region"]
+    )
+    assumptions.append(["Comp A", "SKU Alpha", 12, 4, 1000, 2, "Store One", "Reg 1"])
+    assumptions.append(["Comp B", "SKU Beta", 12, 3, 900, 1, "Store Two", "Reg 2"])
+
+    fees = workbook.create_sheet("BP NEW FEES")
+    fees.append(
+        [
+            "Brand Partner",
+            "SKU",
+            "Units",
+            "Packaging",
+            "Vatable (Yes/No)",
+            "Retail Value Without VAT",
+            "VAT",
+            "Retail Value",
+            "Retail Deliveries Value",
+            "Percentage Retail Deliveries",
+            "Payment Collection Value",
+            "Percentage Payment Collection",
+        ]
+    )
+    fees.append(["Comp A", "SKU Alpha", 12, "Cartons", "Yes", 900, 100, 1000, 120, 0.1, 80, 0.05])
+    fees.append(["Comp B", "SKU Beta", 12, "Cartons", "No", 700, 0, 700, 90, 0.1, 50, 0.05])
+
+    notes = workbook.create_sheet("NOTES FOR USER")
+    notes.append(["Line 1"])
+    notes.append(["Line 2"])
+
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    return stream
 
 
 def test_end_to_end_review_and_alias_memory() -> None:
@@ -539,5 +685,83 @@ def test_review_can_mark_source_sku_inactive_directly() -> None:
             assert inactive_product.is_active is False
             assert run is not None
             assert run.rows_needing_review == 0
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_general_dashboard_and_delivery_note_module_render() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+
+        response = client.get("/")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "One place for planning, loading, and delivery-note export." in html
+        assert "Delivery Note" in html
+        assert "Loading Tracker" in html
+
+        response = client.get("/delivery-note")
+        assert response.status_code == 200
+        assert "Delivery Note studio" in response.get_data(as_text=True)
+
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_loading_tracker_import_builds_initial_module_views() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        workbook = build_loading_tracker_workbook()
+
+        response = client.post(
+            "/loading-tracker/import",
+            data={"loading_tracker_workbook": (BytesIO(workbook.getvalue()), "Week 4 Loading Tracker.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "Loading tracker imported." in html
+        assert "Week 4 Loading Tracker" in html
+
+        with app.app_context():
+            tracker_import = db.session.query(LoadingTrackerImport).one()
+            mon = db.session.query(LoadingTrackerDay).filter_by(day_name="Mon").one()
+            assert tracker_import.assumptions_sku_count == 2
+            assert len(tracker_import.pending_rows_json) == 1
+            assert mon.batch_count == 2
+            assert mon.active_store_count == 2
+            assert float(mon.load_total) == 4.0
+            import_id = tracker_import.id
+
+        day_response = client.get(f"/loading-tracker/imports/{import_id}/days/Mon")
+        assert day_response.status_code == 200
+        day_html = day_response.get_data(as_text=True)
+        assert "Mon planning" in day_html
+        assert "Load 1 to Load 4" in day_html
+        assert "Store One" in day_html
+
+        pending_response = client.get(f"/loading-tracker/imports/{import_id}/pending")
+        assert pending_response.status_code == 200
+        assert "Pending Store" in pending_response.get_data(as_text=True)
+
+        with app.app_context():
             db.session.remove()
             db.engine.dispose()

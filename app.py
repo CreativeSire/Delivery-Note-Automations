@@ -7,6 +7,15 @@ from pathlib import Path
 
 from flask import Flask, abort, flash, redirect, render_template, request, send_file, url_for
 
+from loading_tracker_services import (
+    LoadingTrackerError,
+    build_loading_tracker_overview,
+    build_loading_tracker_summary,
+    get_loading_tracker_day,
+    get_loading_tracker_import,
+    group_store_rows_by_batch,
+    import_loading_tracker_workbook,
+)
 from models import Product, db
 from services import (
     ServiceError,
@@ -47,10 +56,27 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.context_processor
     def inject_app_summary() -> dict[str, object]:
-        return {"app_summary": build_dashboard_summary()}
+        return {
+            "app_summary": build_dashboard_summary(),
+            "loading_summary": build_loading_tracker_summary(),
+        }
 
     @app.get("/")
     def index() -> str:
+        summary = build_dashboard_summary()
+        loading_summary = build_loading_tracker_summary()
+        latest_tracker_import = loading_summary.latest_import
+        tracker_overview = build_loading_tracker_overview(latest_tracker_import)
+        return render_template(
+            "operations_dashboard.html",
+            summary=summary,
+            loading_summary=loading_summary,
+            tracker_overview=tracker_overview,
+            latest_tracker_import=latest_tracker_import,
+        )
+
+    @app.get("/delivery-note")
+    def delivery_note_home() -> str:
         summary = build_dashboard_summary()
         total_products = summary.product_count + summary.inactive_product_count
         chart = {
@@ -60,6 +86,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         }
         return render_template("dashboard.html", summary=summary, chart=chart)
 
+    @app.get("/database")
     @app.get("/products")
     def product_master() -> str:
         active_products = list(
@@ -147,13 +174,13 @@ def create_app(test_config: dict | None = None) -> Flask:
         uploaded_file = request.files.get("uom_workbook")
         if uploaded_file is None or uploaded_file.filename == "":
             flash("Please choose the updated UOM workbook first.", "error")
-            return redirect(url_for("index"))
+            return redirect(url_for("delivery_note_home"))
 
         try:
             import_log = import_uom_workbook(uploaded_file)
         except ServiceError as exc:
             flash(str(exc), "error")
-            return redirect(url_for("index"))
+            return redirect(url_for("delivery_note_home"))
 
         skipped = getattr(import_log, "skipped_count", 0)
         deactivated = getattr(import_log, "deactivated_count", 0)
@@ -169,24 +196,24 @@ def create_app(test_config: dict | None = None) -> Flask:
             )
         else:
             flash(f"UOM import complete. {import_log.product_count} product rows were saved.", "success")
-        return redirect(url_for("index"))
+        return redirect(url_for("delivery_note_home"))
 
     @app.post("/runs/import")
     def upload_tracker() -> str:
         uploaded_file = request.files.get("tracker_workbook")
         if uploaded_file is None or uploaded_file.filename == "":
             flash("Please upload the loading tracker workbook first.", "error")
-            return redirect(url_for("index"))
+            return redirect(url_for("delivery_note_home"))
 
         try:
             run = create_tracker_run(uploaded_file, app.config["APP_TIMEZONE"])
         except ServiceError as exc:
             flash(str(exc), "error")
-            return redirect(url_for("index"))
+            return redirect(url_for("delivery_note_home"))
 
         if run.rows_detected == 0:
             flash("No rows above 0.00 were found in the tracker file.", "error")
-            return redirect(url_for("index"))
+            return redirect(url_for("delivery_note_home"))
 
         if run.rows_needing_review > 0:
             flash("Tracker uploaded. Some SKUs need review before export.", "warning")
@@ -268,6 +295,92 @@ def create_app(test_config: dict | None = None) -> Flask:
             download_name=filename,
             mimetype="application/vnd.ms-excel",
         )
+
+    @app.get("/loading-tracker")
+    def loading_tracker_home() -> str:
+        tracker_import = get_loading_tracker_import()
+        overview = build_loading_tracker_overview(tracker_import)
+        day_cards = tracker_import.days if tracker_import is not None else []
+        return render_template(
+            "loading_tracker_home.html",
+            tracker_import=tracker_import,
+            overview=overview,
+            day_cards=day_cards,
+        )
+
+    @app.get("/loading-tracker/imports/<import_id>")
+    def loading_tracker_import_view(import_id: str) -> str:
+        tracker_import = get_loading_tracker_import(import_id)
+        if tracker_import is None:
+            abort(404)
+        overview = build_loading_tracker_overview(tracker_import)
+        return render_template(
+            "loading_tracker_home.html",
+            tracker_import=tracker_import,
+            overview=overview,
+            day_cards=tracker_import.days,
+        )
+
+    @app.post("/loading-tracker/import")
+    def upload_loading_tracker() -> str:
+        uploaded_file = request.files.get("loading_tracker_workbook")
+        if uploaded_file is None or uploaded_file.filename == "":
+            flash("Please choose the weekly loading tracker workbook first.", "error")
+            return redirect(url_for("loading_tracker_home"))
+
+        try:
+            tracker_import = import_loading_tracker_workbook(uploaded_file)
+        except LoadingTrackerError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("loading_tracker_home"))
+
+        flash(
+            f"Loading tracker imported. {len(tracker_import.days)} day sheet(s), {len(tracker_import.pending_rows_json or [])} pending row(s), and {tracker_import.fees_row_count} fee row(s) were captured.",
+            "success",
+        )
+        return redirect(url_for("loading_tracker_import_view", import_id=tracker_import.id))
+
+    @app.get("/loading-tracker/imports/<import_id>/days/<day_name>")
+    def loading_tracker_day_view(import_id: str, day_name: str) -> str:
+        tracker_import = get_loading_tracker_import(import_id)
+        if tracker_import is None:
+            abort(404)
+        day = get_loading_tracker_day(import_id, day_name)
+        if day is None:
+            abort(404)
+        grouped_batches = group_store_rows_by_batch(day.store_rows_json or [])
+        return render_template(
+            "loading_tracker_day.html",
+            tracker_import=tracker_import,
+            day=day,
+            grouped_batches=grouped_batches,
+        )
+
+    @app.get("/loading-tracker/imports/<import_id>/pending")
+    def loading_tracker_pending_view(import_id: str) -> str:
+        tracker_import = get_loading_tracker_import(import_id)
+        if tracker_import is None:
+            abort(404)
+        grouped_batches = group_store_rows_by_batch(tracker_import.pending_rows_json or [])
+        return render_template(
+            "loading_tracker_pending.html",
+            tracker_import=tracker_import,
+            grouped_batches=grouped_batches,
+        )
+
+    @app.get("/loading-tracker/imports/<import_id>/inventory")
+    def loading_tracker_inventory_view(import_id: str) -> str:
+        tracker_import = get_loading_tracker_import(import_id)
+        if tracker_import is None:
+            abort(404)
+        return render_template("loading_tracker_inventory.html", tracker_import=tracker_import)
+
+    @app.get("/loading-tracker/imports/<import_id>/fees")
+    def loading_tracker_fees_view(import_id: str) -> str:
+        tracker_import = get_loading_tracker_import(import_id)
+        if tracker_import is None:
+            abort(404)
+        return render_template("loading_tracker_fees.html", tracker_import=tracker_import)
 
     @app.get("/health")
     def health() -> dict[str, str]:

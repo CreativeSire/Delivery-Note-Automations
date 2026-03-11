@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}Opening Inventory | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="page-header compact-header">
+    <div>
+      <p class="eyebrow">Loading Tracker</p>
+      <h1>Opening inventory and G2G</h1>
+      <p class="page-copy">This is the weekly starting position. It tells us what stock is okay to go out for loading before the day planning begins.</p>
+    </div>
+    <div class="header-chip">Opening stock view</div>
+  </section>
+
+  <nav class="tracker-day-nav" aria-label="Tracker helper navigation">
+    <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_import_view', import_id=tracker_import.id) }}">Overview</a>
+    <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_pending_view', import_id=tracker_import.id) }}">Pending</a>
+    <a class="tracker-day-link is-active" href="{{ url_for('loading_tracker_inventory_view', import_id=tracker_import.id) }}">Inventory</a>
+    <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_fees_view', import_id=tracker_import.id) }}">Fees</a>
+  </nav>
+
+  <section class="operations-summary-grid">
+    <article class="panel summary-card">
+      <span class="panel-label">Opening G2G</span>
+      <strong>{{ '{:,.2f}'.format(tracker_import.opening_g2g_total or 0) }}</strong>
+      <span class="review-subtle">usable stock before loading</span>
+    </article>
+    <article class="panel summary-card">
+      <span class="panel-label">Opening remaining</span>
+      <strong>{{ '{:,.2f}'.format(tracker_import.opening_remaining_total or 0) }}</strong>
+      <span class="review-subtle">remaining after opening inventory rules</span>
+    </article>
+    <article class="panel summary-card">
+      <span class="panel-label">Assumption SKUs</span>
+      <strong>{{ tracker_import.assumptions_sku_count }}</strong>
+      <span class="review-subtle">product rows on the assumptions sheet</span>
+    </article>
+    <article class="panel summary-card">
+      <span class="panel-label">Assumption stores</span>
+      <strong>{{ tracker_import.assumptions_store_count }}</strong>
+      <span class="review-subtle">stores listed on assumptions</span>
+    </article>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head compact">
+      <div>
+        <p class="eyebrow">Top G2G products</p>
+        <h2>Opening inventory pressure points</h2>
+      </div>
+    </div>
+    {% if tracker_import.opening_top_products_json %}
+      <div class="data-table line-table">
+        <div class="table-line table-head-line">
+          <span>SKU</span>
+          <span>Quantity</span>
+        </div>
+        {% for item in tracker_import.opening_top_products_json %}
+          <div class="table-line">
+            <span>{{ item.sku }}</span>
+            <span>{{ item.quantity }}</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">No opening inventory totals were captured.</p>
+    {% endif %}
+  </section>
+{% endblock %}

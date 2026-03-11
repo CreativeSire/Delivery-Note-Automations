@@ -77,3 +77,57 @@ class UploadLine(db.Model):
 
     run = db.relationship("UploadRun", back_populates="lines")
     product = db.relationship("Product")
+
+
+class LoadingTrackerImport(db.Model):
+    id = db.Column(db.String(32), primary_key=True)
+    filename = db.Column(db.String(255), nullable=False)
+    week_label = db.Column(db.String(255), nullable=False)
+    assumptions_sku_count = db.Column(db.Integer, nullable=False, default=0)
+    assumptions_store_count = db.Column(db.Integer, nullable=False, default=0)
+    pending_g2g_total = db.Column(db.Numeric(14, 4), nullable=True)
+    pending_loaded_total = db.Column(db.Numeric(14, 4), nullable=True)
+    pending_remaining_total = db.Column(db.Numeric(14, 4), nullable=True)
+    opening_g2g_total = db.Column(db.Numeric(14, 4), nullable=True)
+    opening_remaining_total = db.Column(db.Numeric(14, 4), nullable=True)
+    fees_row_count = db.Column(db.Integer, nullable=False, default=0)
+    fees_total_delivery_value = db.Column(db.Numeric(14, 4), nullable=True)
+    fees_total_payment_value = db.Column(db.Numeric(14, 4), nullable=True)
+    notes_count = db.Column(db.Integer, nullable=False, default=0)
+    pending_rows_json = db.Column(db.JSON, nullable=False, default=list)
+    pending_top_products_json = db.Column(db.JSON, nullable=False, default=list)
+    opening_top_products_json = db.Column(db.JSON, nullable=False, default=list)
+    fee_rows_json = db.Column(db.JSON, nullable=False, default=list)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+
+    days = db.relationship(
+        "LoadingTrackerDay",
+        back_populates="tracker_import",
+        cascade="all, delete-orphan",
+        order_by="LoadingTrackerDay.day_order.asc()",
+    )
+
+
+class LoadingTrackerDay(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    tracker_import_id = db.Column(db.String(32), db.ForeignKey("loading_tracker_import.id"), nullable=False, index=True)
+    day_name = db.Column(db.String(32), nullable=False)
+    day_order = db.Column(db.Integer, nullable=False, default=0)
+    g2g_total = db.Column(db.Numeric(14, 4), nullable=True)
+    loaded_total = db.Column(db.Numeric(14, 4), nullable=True)
+    remaining_total = db.Column(db.Numeric(14, 4), nullable=True)
+    expected_store_total = db.Column(db.Numeric(14, 4), nullable=True)
+    batch_count = db.Column(db.Integer, nullable=False, default=0)
+    active_store_count = db.Column(db.Integer, nullable=False, default=0)
+    total_weight = db.Column(db.Numeric(14, 4), nullable=True)
+    total_value = db.Column(db.Numeric(14, 4), nullable=True)
+    load_1_total = db.Column(db.Numeric(14, 4), nullable=True)
+    load_2_total = db.Column(db.Numeric(14, 4), nullable=True)
+    load_3_total = db.Column(db.Numeric(14, 4), nullable=True)
+    load_4_total = db.Column(db.Numeric(14, 4), nullable=True)
+    load_total = db.Column(db.Numeric(14, 4), nullable=True)
+    store_rows_json = db.Column(db.JSON, nullable=False, default=list)
+    top_products_json = db.Column(db.JSON, nullable=False, default=list)
+    load_rows_json = db.Column(db.JSON, nullable=False, default=list)
+
+    tracker_import = db.relationship("LoadingTrackerImport", back_populates="days")

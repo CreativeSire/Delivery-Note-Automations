@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+
+{% block title %}{{ day.day_name }} Planning | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="page-header compact-header">
+    <div>
+      <p class="eyebrow">Loading Tracker</p>
+      <h1>{{ day.day_name }} planning</h1>
+      <p class="page-copy">{{ tracker_import.week_label }} now lives here as day planning, grouped loading batches, and LL totals.</p>
+    </div>
+    <div class="header-chip">{{ day.batch_count }} batch{% if day.batch_count != 1 %}es{% endif %}</div>
+  </section>
+
+  <nav class="tracker-day-nav" aria-label="Day navigation">
+    {% for item in tracker_import.days %}
+      <a class="tracker-day-link {% if item.day_name == day.day_name %}is-active{% endif %}" href="{{ url_for('loading_tracker_day_view', import_id=tracker_import.id, day_name=item.day_name) }}">{{ item.day_name }}</a>
+    {% endfor %}
+    <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_pending_view', import_id=tracker_import.id) }}">Pending</a>
+    <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_inventory_view', import_id=tracker_import.id) }}">Inventory</a>
+    <a class="tracker-day-link secondary" href="{{ url_for('loading_tracker_fees_view', import_id=tracker_import.id) }}">Fees</a>
+  </nav>
+
+  <section class="operations-summary-grid">
+    <article class="panel summary-card">
+      <span class="panel-label">G2G</span>
+      <strong>{{ '{:,.2f}'.format(day.g2g_total or 0) }}</strong>
+      <span class="review-subtle">okay to plan out</span>
+    </article>
+    <article class="panel summary-card">
+      <span class="panel-label">Loaded out</span>
+      <strong>{{ '{:,.2f}'.format(day.loaded_total or 0) }}</strong>
+      <span class="review-subtle">already planned for loading</span>
+    </article>
+    <article class="panel summary-card">
+      <span class="panel-label">Remaining</span>
+      <strong>{{ '{:,.2f}'.format(day.remaining_total or 0) }}</strong>
+      <span class="review-subtle">left after loading</span>
+    </article>
+    <article class="panel summary-card">
+      <span class="panel-label">Total value</span>
+      <strong>{{ '{:,.0f}'.format(day.total_value or 0) }}</strong>
+      <span class="review-subtle">{{ day.active_store_count }} store row{% if day.active_store_count != 1 %}s{% endif %}</span>
+    </article>
+  </section>
+
+  <section class="content-grid content-grid-wide">
+    <article class="panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Planning batches</p>
+          <h2>Load 1 to Load 4</h2>
+        </div>
+      </div>
+      {% if grouped_batches %}
+        <div class="batch-card-grid">
+          {% for batch in grouped_batches %}
+            <section class="batch-card">
+              <div class="batch-card-head">
+                <div>
+                  <span class="panel-label">{{ batch.batch_name }}</span>
+                  <strong>{{ batch.store_count }} store{% if batch.store_count != 1 %}s{% endif %}</strong>
+                </div>
+                <div class="batch-card-metrics">
+                  <span>Qty {{ '{:,.2f}'.format(batch.total_quantity) }}</span>
+                  <span>Value {{ '{:,.0f}'.format(batch.total_value) }}</span>
+                </div>
+              </div>
+              <div class="batch-store-list">
+                {% for row in batch.rows[:10] %}
+                  <div class="batch-store-row">
+                    <div>
+                      <strong>{{ row.store_name }}</strong>
+                      <small>{{ row.region or 'No region' }}{% if row.tier %} · {{ row.tier }}{% endif %}</small>
+                    </div>
+                    <div class="batch-store-meta">
+                      <span>{{ '{:,.2f}'.format(row.total_quantity) }}</span>
+                      <small>{{ row.product_count }} item{% if row.product_count != 1 %}s{% endif %}</small>
+                    </div>
+                  </div>
+                {% endfor %}
+              </div>
+            </section>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No active planning rows were found for this day.</p>
+      {% endif %}
+    </article>
+
+    <article class="panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Loading list</p>
+          <h2>LL {{ day.day_name }}</h2>
+        </div>
+      </div>
+      <div class="tracker-overview-stack ll-summary-stack">
+        <div class="tracker-overview-row"><span class="metric-label">Load 1</span><strong>{{ '{:,.2f}'.format(day.load_1_total or 0) }}</strong></div>
+        <div class="tracker-overview-row"><span class="metric-label">Load 2</span><strong>{{ '{:,.2f}'.format(day.load_2_total or 0) }}</strong></div>
+        <div class="tracker-overview-row"><span class="metric-label">Load 3</span><strong>{{ '{:,.2f}'.format(day.load_3_total or 0) }}</strong></div>
+        <div class="tracker-overview-row"><span class="metric-label">Load 4</span><strong>{{ '{:,.2f}'.format(day.load_4_total or 0) }}</strong></div>
+        <div class="tracker-overview-row"><span class="metric-label">Total</span><strong>{{ '{:,.2f}'.format(day.load_total or 0) }}</strong></div>
+      </div>
+
+      {% if day.load_rows_json %}
+        <div class="data-table line-table loading-list-table">
+          <div class="table-line table-head-line">
+            <span>SKU</span>
+            <span>L1</span>
+            <span>L2</span>
+            <span>L3</span>
+            <span>L4</span>
+            <span>Total</span>
+          </div>
+          {% for row in day.load_rows_json[:18] %}
+            <div class="table-line">
+              <span>{{ row.sku }}</span>
+              <span>{{ row.load_1 }}</span>
+              <span>{{ row.load_2 }}</span>
+              <span>{{ row.load_3 }}</span>
+              <span>{{ row.load_4 }}</span>
+              <span>{{ row.total }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No LL rows were captured for this day.</p>
+      {% endif %}
+    </article>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head compact">
+      <div>
+        <p class="eyebrow">Top products</p>
+        <h2>Most planned SKUs for {{ day.day_name }}</h2>
+      </div>
+    </div>
+    {% if day.top_products_json %}
+      <div class="data-table line-table">
+        <div class="table-line table-head-line">
+          <span>SKU</span>
+          <span>Quantity</span>
+        </div>
+        {% for item in day.top_products_json %}
+          <div class="table-line">
+            <span>{{ item.sku }}</span>
+            <span>{{ item.quantity }}</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">No positive product quantities were found for this day.</p>
+    {% endif %}
+  </section>
+{% endblock %}

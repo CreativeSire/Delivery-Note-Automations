@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Run {{ summary.run.id }} | DALA OPERATIONS{% endblock %}
+{% block title %}Delivery Note Run {{ summary.run.id }} | DALA OPERATIONS{% endblock %}
 
 {% block content %}
   <section class="page-header">
@@ -24,7 +24,7 @@
       {% else %}
         <a class="primary-button" href="{{ url_for('download_run', run_id=summary.run.id) }}">Download XLS</a>
       {% endif %}
-      <a class="secondary-button" href="{{ url_for('index') }}">Back to dashboard</a>
+      <a class="secondary-button" href="{{ url_for('delivery_note_home') }}">Back to Delivery Note</a>
     </div>
   </section>
 

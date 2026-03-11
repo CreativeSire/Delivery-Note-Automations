@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="page-header operations-hero">
+    <div>
+      <p class="eyebrow">Operations dashboard</p>
+      <h1>One place for planning, loading, and delivery-note export.</h1>
+      <p class="page-copy">Use Delivery Note for upload-ready exports. Use Loading Tracker for daily trip planning, G2G control, pending loads, and loading batches.</p>
+    </div>
+    <div class="operations-badge">Platform live</div>
+  </section>
+
+  <section class="operations-summary-grid">
+    <article class="panel summary-card">
+      <span class="panel-label">Active products</span>
+      <strong>{{ summary.product_count }}</strong>
+      <span class="review-subtle">{{ summary.inactive_product_count }} inactive in reserve</span>
+    </article>
+    <article class="panel summary-card">
+      <span class="panel-label">Delivery note runs</span>
+      <strong>{{ summary.run_count }}</strong>
+      <span class="review-subtle">{{ summary.alias_count }} saved name corrections</span>
+    </article>
+    <article class="panel summary-card">
+      <span class="panel-label">Tracker imports</span>
+      <strong>{{ loading_summary.import_count }}</strong>
+      <span class="review-subtle">{{ tracker_overview.day_count }} active planning day{% if tracker_overview.day_count != 1 %}s{% endif %}</span>
+    </article>
+    <article class="panel summary-card">
+      <span class="panel-label">Pending loads</span>
+      <strong>{{ loading_summary.total_pending_stores }}</strong>
+      <span class="review-subtle">still waiting for planning or stock</span>
+    </article>
+  </section>
+
+  <section class="module-grid">
+    <article class="panel module-card module-card-accent">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Module</p>
+          <h2>Delivery Note</h2>
+        </div>
+        <span class="mini-chip">{{ summary.run_count }} run{% if summary.run_count != 1 %}s{% endif %}</span>
+      </div>
+      <p class="module-copy">Turn flattened supermarket quantity sheets into clean `.xls` delivery-note exports using the live product master.</p>
+      <div class="module-kpis">
+        <div>
+          <span class="metric-label">Live source</span>
+          <strong>{{ summary.latest_import.filename if summary.latest_import else 'Not loaded yet' }}</strong>
+        </div>
+        <div>
+          <span class="metric-label">Recent runs</span>
+          <strong>{{ summary.recent_runs|length }}</strong>
+        </div>
+      </div>
+      <div class="actions">
+        <a class="primary-button" href="{{ url_for('delivery_note_home') }}">Open Delivery Note</a>
+        <a class="secondary-button" href="{{ url_for('product_master') }}">Open Database</a>
+      </div>
+    </article>
+
+    <article class="panel module-card module-card-graph">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Module</p>
+          <h2>Loading Tracker</h2>
+        </div>
+        <span class="mini-chip">{{ tracker_overview.total_batches }} batch{% if tracker_overview.total_batches != 1 %}es{% endif %}</span>
+      </div>
+      <p class="module-copy">Import the weekly loading tracker, review day planning, check pending loads, watch G2G, and inspect loading batches from one place.</p>
+
+      <div class="mini-bar-cluster">
+        {% if latest_tracker_import and latest_tracker_import.days %}
+          {% for day in latest_tracker_import.days %}
+            <div class="mini-bar-column">
+              <span class="mini-bar-label">{{ day.day_name }}</span>
+              <span class="mini-bar-track">
+                <span class="mini-bar-fill" style="height: {{ ((day.total_value or 0) / (tracker_overview.largest_day.total_value or 1) * 100)|round(0, 'ceil') if tracker_overview.largest_day else 0 }}%"></span>
+              </span>
+              <small>{{ '{:,.0f}'.format(day.total_value or 0) }}</small>
+            </div>
+          {% endfor %}
+        {% else %}
+          <p class="empty-state">No weekly tracker imported yet.</p>
+        {% endif %}
+      </div>
+
+      <div class="actions">
+        <a class="primary-button" href="{{ url_for('loading_tracker_home') }}">Open Loading Tracker</a>
+        {% if latest_tracker_import %}
+          <a class="secondary-button" href="{{ url_for('loading_tracker_pending_view', import_id=latest_tracker_import.id) }}">Open Pending</a>
+        {% endif %}
+      </div>
+    </article>
+  </section>
+
+  <section class="content-grid content-grid-wide">
+    <article class="panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Delivery Note</p>
+          <h2>Recent export runs</h2>
+        </div>
+      </div>
+      {% if summary.recent_runs %}
+        <div class="data-table line-table">
+          <div class="table-line table-head-line table-line-dashboard">
+            <span>File</span>
+            <span>Status</span>
+            <span>Ready</span>
+            <span>Review</span>
+          </div>
+          {% for run in summary.recent_runs %}
+            <div class="table-line table-line-dashboard">
+              <span class="product-main-cell">
+                <strong>{{ run.original_filename }}</strong>
+                <small>{{ run.invoice_date }}</small>
+              </span>
+              <span><span class="status-pill status-{{ run.status }}">{{ run.status.replace('_', ' ') }}</span></span>
+              <span>{{ run.rows_ready }}</span>
+              <span>{{ run.rows_needing_review }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No delivery-note runs yet.</p>
+      {% endif %}
+    </article>
+
+    <article class="panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Loading Tracker</p>
+          <h2>Latest planning file</h2>
+        </div>
+      </div>
+      {% if latest_tracker_import %}
+        <div class="tracker-overview-stack">
+          <div class="tracker-overview-row">
+            <span class="metric-label">Week file</span>
+            <strong>{{ latest_tracker_import.week_label }}</strong>
+          </div>
+          <div class="tracker-overview-row">
+            <span class="metric-label">G2G on opening</span>
+            <strong>{{ '{:,.2f}'.format(latest_tracker_import.opening_g2g_total or 0) }}</strong>
+          </div>
+          <div class="tracker-overview-row">
+            <span class="metric-label">Pending loads</span>
+            <strong>{{ loading_summary.total_pending_stores }}</strong>
+          </div>
+          <div class="tracker-overview-row">
+            <span class="metric-label">Fee rows</span>
+            <strong>{{ latest_tracker_import.fees_row_count }}</strong>
+          </div>
+        </div>
+      {% else %}
+        <p class="empty-state">No loading tracker imported yet.</p>
+      {% endif %}
+    </article>
+  </section>
+{% endblock %}

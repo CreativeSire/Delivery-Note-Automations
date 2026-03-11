@@ -14,54 +14,57 @@
     <div class="workspace-shell">
       <aside class="workspace-sidebar">
         <div class="sidebar-brand">
-          <span class="sidebar-kicker">Operations</span>
+          <span class="sidebar-kicker">Operations Platform</span>
           <a class="sidebar-title" href="{{ url_for('index') }}">DALA OPERATIONS</a>
         </div>
 
         <nav class="sidebar-nav" aria-label="Main navigation">
           <a class="nav-link {% if request.endpoint == 'index' %}is-active{% endif %}" href="{{ url_for('index') }}">Dashboard</a>
-          <a class="nav-link {% if request.endpoint in ['product_master', 'create_product', 'edit_product', 'update_product'] %}is-active{% endif %}" href="{{ url_for('product_master') }}">Database</a>
+          <a class="nav-link {% if request.endpoint in ['delivery_note_home', 'upload_uom', 'upload_tracker', 'view_run', 'review_run', 'submit_review', 'download_run'] %}is-active{% endif %}" href="{{ url_for('delivery_note_home') }}">Delivery Note</a>
+          <a class="nav-link {% if request.endpoint in ['loading_tracker_home', 'upload_loading_tracker', 'loading_tracker_import_view', 'loading_tracker_day_view', 'loading_tracker_pending_view', 'loading_tracker_inventory_view', 'loading_tracker_fees_view'] %}is-active{% endif %}" href="{{ url_for('loading_tracker_home') }}">Loading Tracker</a>
+          <a class="nav-link {% if request.endpoint in ['product_master', 'create_product', 'edit_product', 'update_product', 'deactivate_product', 'activate_product'] %}is-active{% endif %}" href="{{ url_for('product_master') }}">Database</a>
         </nav>
 
         <section class="sidebar-panel">
-          <p class="panel-label">Live database</p>
+          <p class="panel-label">Delivery note live source</p>
           {% if app_summary.latest_import %}
             <strong class="sidebar-source">{{ app_summary.latest_import.filename }}</strong>
             <span class="sidebar-meta">{{ app_summary.latest_import.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
           {% else %}
-            <strong class="sidebar-source">No UOM imported yet</strong>
-            <span class="sidebar-meta">Add a source file to begin.</span>
+            <strong class="sidebar-source">No UOM loaded</strong>
+            <span class="sidebar-meta">Import the latest source file in Delivery Note.</span>
           {% endif %}
+          <a class="sidebar-link" href="{{ url_for('delivery_note_home') }}">Open Delivery Note</a>
+        </section>
 
-          {% if request.endpoint == 'index' %}
-            <form class="sidebar-form" action="{{ url_for('upload_uom') }}" method="post" enctype="multipart/form-data">
-              <label class="sidebar-upload">
-                <span class="field-label">Replace UOM</span>
-                <input name="uom_workbook" type="file" accept=".xlsx,.xls,.tsv,.txt" required>
-              </label>
-              <button class="sidebar-button" type="submit">Update source</button>
-            </form>
+        <section class="sidebar-panel">
+          <p class="panel-label">Loading tracker live file</p>
+          {% if loading_summary.latest_import %}
+            <strong class="sidebar-source">{{ loading_summary.latest_import.week_label }}</strong>
+            <span class="sidebar-meta">{{ loading_summary.latest_import.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
           {% else %}
-            <a class="sidebar-link" href="{{ url_for('index') }}">Update source on dashboard</a>
+            <strong class="sidebar-source">No weekly tracker loaded</strong>
+            <span class="sidebar-meta">Import the planning workbook in Loading Tracker.</span>
           {% endif %}
+          <a class="sidebar-link" href="{{ url_for('loading_tracker_home') }}">Open Loading Tracker</a>
         </section>
 
         <section class="sidebar-panel sidebar-stats">
           <div>
-            <span class="metric-label">Active</span>
+            <span class="metric-label">Products</span>
             <strong>{{ app_summary.product_count }}</strong>
           </div>
           <div>
-            <span class="metric-label">Inactive</span>
-            <strong>{{ app_summary.inactive_product_count }}</strong>
-          </div>
-          <div>
-            <span class="metric-label">Corrections</span>
-            <strong>{{ app_summary.alias_count }}</strong>
-          </div>
-          <div>
-            <span class="metric-label">Runs</span>
+            <span class="metric-label">DN Runs</span>
             <strong>{{ app_summary.run_count }}</strong>
+          </div>
+          <div>
+            <span class="metric-label">Tracker Days</span>
+            <strong>{{ loading_summary.latest_import.days|length if loading_summary.latest_import else 0 }}</strong>
+          </div>
+          <div>
+            <span class="metric-label">Pending</span>
+            <strong>{{ loading_summary.total_pending_stores }}</strong>
           </div>
         </section>
       </aside>
