@@ -245,6 +245,19 @@ def build_stock_category_summary_workbook() -> BytesIO:
     return stream
 
 
+def build_stock_category_summary_uom_layout_workbook() -> BytesIO:
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = "Stock Category Summary"
+    ws.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
+    ws.append(["AMB- 100ml Carrot Oil (12x)", "ctn", "unt", 12, "No", 33600])
+    ws.append(["1.5Litre Palm Oil (6X)", "ctn", "btt", 6, "Yes", 27759.69])
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    return stream
+
+
 def build_loading_tracker_workbook_with_duplicate_sections() -> BytesIO:
     workbook = Workbook()
     workbook_stream = build_loading_tracker_workbook()
@@ -769,6 +782,51 @@ def test_stock_category_summary_workbook_imports_into_uom_master() -> None:
             assert palm.alt_uom == "btt"
             assert float(palm.conversion) == 6.0
             assert palm.vatable is False
+            assert float(palm.price) == 27759.69
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_uom_layout_on_stock_category_summary_sheet_imports_into_uom_master() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+
+        response = client.post(
+            "/uom/import",
+            data={
+                "return_to": "product_master",
+                "uom_workbook": (
+                    BytesIO(build_stock_category_summary_uom_layout_workbook().getvalue()),
+                    "Stock_Items_&_Pricelist (1).xlsx",
+                ),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "UOM import complete" in html or "UOM update complete" in html
+
+        with app.app_context():
+            carrot = db.session.query(Product).filter_by(sku_name="AMB- 100ml Carrot Oil (12x)").one()
+            palm = db.session.query(Product).filter_by(sku_name="1.5Litre Palm Oil (6X)").one()
+            assert carrot.uom == "ctn"
+            assert carrot.alt_uom == "unt"
+            assert float(carrot.conversion) == 12.0
+            assert carrot.vatable is False
+            assert float(carrot.price) == 33600.0
+            assert palm.uom == "ctn"
+            assert palm.alt_uom == "btt"
+            assert float(palm.conversion) == 6.0
+            assert palm.vatable is True
             assert float(palm.price) == 27759.69
             db.session.remove()
             db.engine.dispose()

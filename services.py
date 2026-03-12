@@ -130,23 +130,24 @@ def import_uom_workbook(file_storage: Any) -> UomImport:
 
     workbook = _try_load_workbook(payload)
     if workbook is not None:
-        if UOM_SHEET not in workbook.sheetnames:
-            stock_rows = _extract_stock_category_summary_rows(workbook)
-            if stock_rows is not None:
-                return import_uom_rows(stock_rows, filename, mode="replace")
-            raise WorkbookShapeError(
-                f"The workbook must contain a '{UOM_SHEET}' sheet or a recognized 'Stock Category Summary' sheet."
-            )
+        rows = _extract_uom_workbook_rows(workbook)
+        if rows is not None:
+            return import_uom_rows(rows, filename, mode="replace")
 
-        rows = _extract_uom_sheet_rows(workbook[UOM_SHEET])
-        return import_uom_rows(rows, filename, mode="replace")
+        stock_rows = _extract_stock_category_summary_rows(workbook)
+        if stock_rows is not None:
+            return import_uom_rows(stock_rows, filename, mode="replace")
+
+        raise WorkbookShapeError(
+            f"The workbook must contain a '{UOM_SHEET}' sheet, a recognized UOM header layout, or a recognized 'Stock Category Summary' sheet."
+        )
 
     item_rows = _extract_item_list_rows(payload)
     if item_rows is not None:
         return import_uom_rows(item_rows, filename, mode="merge")
 
     raise WorkbookShapeError(
-        "The uploaded file must be a UOM workbook, a Stock Category Summary workbook, or an item list export."
+        "The uploaded file must be a UOM workbook, a workbook with UOM-style headers, a Stock Category Summary workbook, or an item list export."
     )
 
 
@@ -834,7 +835,38 @@ def _try_load_workbook(payload: bytes):
         return None
 
 
+def _extract_uom_workbook_rows(workbook: Any) -> list[list[Any]] | None:
+    if UOM_SHEET in workbook.sheetnames:
+        return _extract_uom_sheet_rows(workbook[UOM_SHEET])
+
+    required_headers = {"item", "uom", "alt uom", "conversion", "vatable", "prices"}
+    for sheet in workbook.worksheets:
+        headers = [_normalize_header(sheet.cell(1, column_index).value) for column_index in range(1, sheet.max_column + 1)]
+        if not required_headers.issubset(set(headers)):
+            continue
+        return _extract_uom_sheet_rows(sheet)
+
+    return None
+
+
 def _extract_uom_sheet_rows(sheet: Any) -> list[list[Any]]:
+    headers = [_normalize_header(sheet.cell(1, column_index).value) for column_index in range(1, sheet.max_column + 1)]
+    header_map = {header: index + 1 for index, header in enumerate(headers) if header}
+    required_headers = {"item", "uom", "alt uom", "conversion", "vatable", "prices"}
+
+    if required_headers.issubset(set(header_map)):
+        return [
+            [
+                sheet.cell(row_index, header_map["item"]).value,
+                sheet.cell(row_index, header_map["uom"]).value,
+                sheet.cell(row_index, header_map["alt uom"]).value,
+                sheet.cell(row_index, header_map["conversion"]).value,
+                sheet.cell(row_index, header_map["vatable"]).value,
+                sheet.cell(row_index, header_map["prices"]).value,
+            ]
+            for row_index in range(2, sheet.max_row + 1)
+        ]
+
     return [
         [
             sheet.cell(row_index, 1).value,
