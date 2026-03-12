@@ -23,13 +23,13 @@
         <a class="primary-button" href="{{ url_for('review_run', run_id=summary.run.id) }}">Review unresolved SKUs</a>
       {% else %}
         {% if summary.category_counts['BP'] %}
-          <a class="primary-button" href="{{ url_for('download_run', run_id=summary.run.id, category='BP') }}">Download BP</a>
+          <a class="primary-button invoice-button invoice-button-bp" href="{{ url_for('download_run', run_id=summary.run.id, category='BP') }}">Download BP</a>
         {% endif %}
         {% if summary.category_counts['VT'] %}
-          <a class="primary-button" href="{{ url_for('download_run', run_id=summary.run.id, category='VT') }}">Download VT</a>
+          <a class="primary-button invoice-button invoice-button-vt" href="{{ url_for('download_run', run_id=summary.run.id, category='VT') }}">Download VT</a>
         {% endif %}
         {% if summary.category_counts['NV'] %}
-          <a class="primary-button" href="{{ url_for('download_run', run_id=summary.run.id, category='NV') }}">Download NV</a>
+          <a class="primary-button invoice-button invoice-button-nv" href="{{ url_for('download_run', run_id=summary.run.id, category='NV') }}">Download NV</a>
         {% endif %}
       {% endif %}
       {% if summary.ignored_groups %}
@@ -39,9 +39,9 @@
     </div>
     {% if summary.run.rows_needing_review == 0 %}
       <div class="database-toolbar">
-        <span class="database-toolbar-pill">BP {{ summary.category_counts['BP'] }}</span>
-        <span class="database-toolbar-pill">VT {{ summary.category_counts['VT'] }}</span>
-        <span class="database-toolbar-pill">NV {{ summary.category_counts['NV'] }}</span>
+        <span class="database-toolbar-pill invoice-pill invoice-pill-bp">BP {{ summary.category_counts['BP'] }}</span>
+        <span class="database-toolbar-pill invoice-pill invoice-pill-vt">VT {{ summary.category_counts['VT'] }}</span>
+        <span class="database-toolbar-pill invoice-pill invoice-pill-nv">NV {{ summary.category_counts['NV'] }}</span>
       </div>
     {% endif %}
   </section>

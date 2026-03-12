@@ -47,8 +47,10 @@
           </div>
         {% for line in summary.preview_lines %}
           <div class="table-line table-line-sales-order-preview">
-            <span>{{ line.prefixed_reference_no or line.raw_reference_no or line.order_number }}</span>
-            <span>{{ line.invoice_category or 'Pending' }}</span>
+            <span class="invoice-meta">
+              <span class="invoice-reference">{{ line.prefixed_reference_no or line.raw_reference_no or line.order_number }}</span>
+            </span>
+            <span><span class="invoice-pill invoice-pill-{{ (line.invoice_category or 'pending')|lower }}">{{ line.invoice_category or 'Pending' }}</span></span>
             <span>{{ line.retailer_name }}</span>
             <span>{{ line.resolved_sku_name }}</span>
             <span>{{ line.resolved_quantity_text }}</span>

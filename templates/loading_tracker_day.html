@@ -149,7 +149,13 @@
               </label>
               <div class="planner-sku-list">
                 {% for item in row.top_items %}
-                  <span>{{ item.sku }} <strong>{{ item.quantity }}</strong></span>
+                  <span>
+                    <span>{{ item.sku }}</span>
+                    <strong>{{ item.quantity }}</strong>
+                    {% if item.invoice_category %}
+                      <span class="invoice-pill invoice-pill-{{ item.invoice_category|lower }}">{{ item.invoice_category }}</span>
+                    {% endif %}
+                  </span>
                 {% endfor %}
               </div>
               <div class="row-actions row-actions-stacked">
