@@ -65,6 +65,11 @@ SALES_LEDGER_NAME = "Inventory Pool"
 VAT_LABEL = "VAT"
 VAT_RATE = Decimal("7.5")
 CASE_UNITS = {"case", "cases", "ctn", "carton", "cartons"}
+SALES_ORDER_CATEGORY_COLORS = {
+    "BP": {"row_fill": "FFF5E7", "key_fill": "FFCFA14B", "key_font": "FFFDF7"},
+    "VT": {"row_fill": "EAF5F7", "key_fill": "FF1D6670", "key_font": "FFFFFFFF"},
+    "NV": {"row_fill": "EFF2F3", "key_fill": "FF596970", "key_font": "FFFFFFFF"},
+}
 
 
 class WorkflowError(Exception):
@@ -445,6 +450,7 @@ def export_sales_order_run_to_workbook(run_id: str) -> tuple[str, bytes]:
                 float(_vat_amount(line.resolved_amount or Decimal("0"))) if line.resolved_vatable else "",
             ]
         )
+        _apply_sales_order_category_style(sheet, sheet.max_row, line.invoice_category)
         date_cell = sheet.cell(sheet.max_row, 1)
         if isinstance(date_cell.value, datetime):
             date_cell.number_format = "yyyy-mm-dd"
@@ -898,6 +904,23 @@ def _write_styled_header(sheet: Any, headers: list[str]) -> None:
         cell.fill = header_fill
         cell.font = header_font
         sheet.column_dimensions[cell.column_letter].width = min(max(len(header) + 4, 16), 34)
+
+
+def _apply_sales_order_category_style(sheet: Any, row_index: int, invoice_category: str | None) -> None:
+    palette = SALES_ORDER_CATEGORY_COLORS.get((invoice_category or "").upper())
+    if palette is None:
+        return
+
+    row_fill = PatternFill(fill_type="solid", fgColor=palette["row_fill"])
+    key_fill = PatternFill(fill_type="solid", fgColor=palette["key_fill"])
+    key_font = Font(color=palette["key_font"], bold=True)
+
+    for column_index in range(1, len(SALES_ORDER_HEADERS) + 1):
+        sheet.cell(row_index, column_index).fill = row_fill
+
+    order_cell = sheet.cell(row_index, 2)
+    order_cell.fill = key_fill
+    order_cell.font = key_font
 
 
 def _save_workbook(workbook: Workbook) -> bytes:
