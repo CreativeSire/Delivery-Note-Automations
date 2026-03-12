@@ -437,16 +437,18 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.post("/uom/import")
     def upload_uom() -> str:
+        return_to = request.form.get("return_to", "").strip()
+        redirect_target = "product_master" if return_to == "product_master" else "delivery_note_home"
         uploaded_file = request.files.get("uom_workbook")
         if uploaded_file is None or uploaded_file.filename == "":
             flash("Please choose the updated UOM workbook first.", "error")
-            return redirect(url_for("delivery_note_home"))
+            return redirect(url_for(redirect_target))
 
         try:
             import_log = import_uom_workbook(uploaded_file)
         except ServiceError as exc:
             flash(str(exc), "error")
-            return redirect(url_for("delivery_note_home"))
+            return redirect(url_for(redirect_target))
 
         skipped = getattr(import_log, "skipped_count", 0)
         deactivated = getattr(import_log, "deactivated_count", 0)
@@ -462,7 +464,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             )
         else:
             flash(f"UOM import complete. {import_log.product_count} product rows were saved.", "success")
-        return redirect(url_for("delivery_note_home"))
+        return redirect(url_for(redirect_target))
 
     @app.post("/runs/import")
     def upload_tracker() -> str:

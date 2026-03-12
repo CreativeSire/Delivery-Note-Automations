@@ -665,6 +665,44 @@ def test_product_master_can_add_edit_deactivate_and_restore() -> None:
             db.engine.dispose()
 
 
+def test_product_master_page_exposes_uom_import_and_redirects_back() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+
+        page = client.get("/database")
+        html = page.get_data(as_text=True)
+        assert page.status_code == 200
+        assert "Refresh UOM source" in html
+        assert "Import UOM file" in html
+
+        response = client.post(
+            "/uom/import",
+            data={
+                "return_to": "product_master",
+                "uom_workbook": (BytesIO(build_loading_tracker_uom_workbook().getvalue()), "uom.xlsx"),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "UOM import complete" in html
+        assert "Product master" in html
+
+        with app.app_context():
+            assert db.session.query(Product).count() == 2
+            db.session.remove()
+            db.engine.dispose()
+
+
 def test_manual_product_stays_active_after_new_uom_import() -> None:
     with TemporaryDirectory() as temp_dir:
         app = create_app(

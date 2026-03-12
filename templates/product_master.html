@@ -97,6 +97,29 @@
     <article class="panel form-panel soft-panel database-form-panel">
       <div class="panel-head compact">
         <div>
+          <p class="eyebrow">Import</p>
+          <h2>Refresh UOM source</h2>
+        </div>
+      </div>
+
+      <p class="page-copy database-form-copy">Upload the latest UOM or item-list file here to refresh the live database. This updates the UOM-backed products, rates, VAT, and inactive status in the master.</p>
+
+      <form class="form-stack" action="{{ url_for('upload_uom') }}" method="post" enctype="multipart/form-data">
+        <input type="hidden" name="return_to" value="product_master">
+        <label class="file-field">
+          <span class="field-label">UOM workbook</span>
+          <input name="uom_workbook" type="file" accept=".xlsx,.xls,.csv,.tsv" required>
+        </label>
+        <div class="chip-row">
+          <span class="info-chip">Refresh product master</span>
+          <span class="info-chip">Update UOM and VAT</span>
+          <span class="info-chip">Mark missing rows inactive</span>
+        </div>
+        <button class="primary-button" type="submit">Import UOM file</button>
+      </form>
+
+      <div class="panel-head compact">
+        <div>
           <p class="eyebrow">{% if product_to_edit %}Edit{% else %}Add{% endif %}</p>
           <h2>{% if product_to_edit %}Update product{% else %}New product{% endif %}</h2>
         </div>
