@@ -8,8 +8,23 @@
       <p class="eyebrow">Database</p>
       <h1>Product master</h1>
     </div>
-    <div class="header-chip">{{ summary.product_count }} active products</div>
+    <div class="actions">
+      <a class="secondary-button" href="{{ url_for('brand_partner_rules_home') }}">Brand Partner rules</a>
+      <a class="secondary-button" href="{{ url_for('audit_timeline', module='Database') }}">Audit timeline</a>
+      <div class="header-chip">{{ summary.product_count }} active products</div>
+    </div>
   </section>
+
+  {% if pending_uom_review %}
+    <section class="glass-card delivery-run-empty">
+      <span class="mini-chip">Pending review</span>
+      <h2>UOM source needs confirmation before it replaces the live catalog.</h2>
+      <p class="empty-state">The latest source file would affect {{ pending_uom_review.missing_count }} current product{{ '' if pending_uom_review.missing_count == 1 else 's' }}. Review rename candidates or keep items active before applying it.</p>
+      <div class="actions">
+        <a class="primary-button" href="{{ url_for('view_uom_review', review_id=pending_uom_review.id) }}">Open UOM review</a>
+      </div>
+    </section>
+  {% endif %}
 
   <section class="database-summary-grid">
     <article class="panel database-summary-card">
@@ -139,6 +154,11 @@
         <button class="primary-button" type="submit">Import UOM file</button>
       </form>
 
+      <div class="delivery-run-empty">
+        <span class="mini-chip">Safer sync</span>
+        <p class="empty-state">If the new source would rename or remove current UOM-backed products, the app now opens a review queue first instead of quietly pushing them into Removed products.</p>
+      </div>
+
       <div class="panel-head compact">
         <div>
           <p class="eyebrow">{% if product_to_edit %}Edit{% else %}Add{% endif %}</p>
@@ -198,12 +218,14 @@
           <p class="eyebrow">Invoice rules</p>
           <h2>Brand Partner overrides</h2>
         </div>
+        <a class="secondary-button" href="{{ url_for('brand_partner_rules_home') }}">Open rules workspace</a>
       </div>
 
-      <p class="page-copy database-form-copy">Use these rules when a SKU should become <code>BP-</code> for a specific store or for every store.</p>
+      <p class="page-copy database-form-copy">Use these rules when a SKU should become <code>BP-</code> for a specific store or for every store. Open the dedicated rules workspace for testing and cleaner admin work.</p>
 
       <form class="form-stack" action="{{ url_for('create_brand_partner_rule') }}" method="post">
         <input type="hidden" name="q" value="{{ search_query }}">
+        <input type="hidden" name="return_to" value="product_master">
         <label class="field">
           <span class="field-label">SKU pattern</span>
           <input name="sku_name_pattern" type="text" placeholder="SKU Alpha" required>
@@ -238,6 +260,7 @@
               <span>
                 <form action="{{ url_for('deactivate_brand_partner_rule', rule_id=rule.id) }}" method="post">
                   <input type="hidden" name="q" value="{{ search_query }}">
+                  <input type="hidden" name="return_to" value="product_master">
                   <button class="text-button danger" type="submit">Remove</button>
                 </form>
               </span>

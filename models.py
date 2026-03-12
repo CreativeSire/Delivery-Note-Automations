@@ -19,6 +19,23 @@ class UomImport(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class UomImportReview(db.Model):
+    id = db.Column(db.String(32), primary_key=True)
+    filename = db.Column(db.String(255), nullable=False)
+    status = db.Column(db.String(32), nullable=False, default="pending", index=True)
+    row_count = db.Column(db.Integer, nullable=False, default=0)
+    matched_count = db.Column(db.Integer, nullable=False, default=0)
+    new_count = db.Column(db.Integer, nullable=False, default=0)
+    missing_count = db.Column(db.Integer, nullable=False, default=0)
+    rename_candidate_count = db.Column(db.Integer, nullable=False, default=0)
+    rows_json = db.Column(db.JSON, nullable=False, default=list)
+    unmatched_rows_json = db.Column(db.JSON, nullable=False, default=list)
+    missing_products_json = db.Column(db.JSON, nullable=False, default=list)
+    import_log_id = db.Column(db.Integer, db.ForeignKey("uom_import.id"), nullable=True, index=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    applied_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+
 class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     sku_name = db.Column(db.String(255), nullable=False, unique=True)
@@ -56,6 +73,18 @@ class BrandPartnerRule(db.Model):
     normalized_store_pattern = db.Column(db.String(255), nullable=True, index=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class AuditEvent(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    module_name = db.Column(db.String(64), nullable=False, index=True)
+    event_type = db.Column(db.String(64), nullable=False, index=True)
+    entity_type = db.Column(db.String(64), nullable=False)
+    entity_id = db.Column(db.String(64), nullable=True)
+    entity_name = db.Column(db.String(255), nullable=False)
+    summary_text = db.Column(db.String(255), nullable=False)
+    details_json = db.Column(db.JSON, nullable=False, default=dict)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow, index=True)
 
 
 class UploadRun(db.Model):

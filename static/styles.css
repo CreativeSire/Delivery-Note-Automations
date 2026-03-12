@@ -873,6 +873,11 @@ h2 {
   text-transform: uppercase;
 }
 
+.database-toolbar-pill.is-active {
+  background: rgba(31, 97, 108, 0.12);
+  color: var(--brand);
+}
+
 .database-table {
   gap: 0;
 }
@@ -2706,6 +2711,34 @@ h3 {
   padding: 18px;
   border-radius: 22px;
   background: rgba(20, 52, 60, 0.04);
+}
+
+.warning-row-rich {
+  display: grid;
+  gap: 12px;
+}
+
+.uom-review-decision {
+  display: grid;
+  gap: 10px;
+  width: min(360px, 100%);
+}
+
+.audit-timeline-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.audit-event-card {
+  display: grid;
+  gap: 10px;
+}
+
+.audit-event-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .tracker-day-nav {

@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}Brand Partner Rules | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="hero-band">
+    <div>
+      <p class="eyebrow">Database · Brand Partner rules</p>
+      <h1>Control which SKU and store combinations turn into <code>BP-</code>.</h1>
+      <p class="page-copy">Keep BP logic explicit here, test it before it reaches Sales Order or Delivery Note, and make the reasoning visible to the team.</p>
+    </div>
+    <div class="actions">
+      <a class="secondary-button" href="{{ url_for('product_master') }}">Back to Database</a>
+      <a class="secondary-button" href="{{ url_for('audit_timeline', module='Database') }}">Audit timeline</a>
+    </div>
+  </section>
+
+  <section class="content-split">
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Rule builder</p>
+          <h2>Add BP override</h2>
+        </div>
+      </div>
+      <form class="form-stack" action="{{ url_for('create_brand_partner_rule') }}" method="post">
+        <input type="hidden" name="return_to" value="bp_rules">
+        <input type="hidden" name="q" value="{{ search_query }}">
+        <label class="field">
+          <span class="field-label">SKU pattern</span>
+          <input name="sku_name_pattern" type="text" placeholder="SKU Alpha" required>
+        </label>
+        <label class="field">
+          <span class="field-label">Store pattern</span>
+          <input name="store_name_pattern" type="text" placeholder="Optional store match">
+        </label>
+        <label class="field">
+          <span class="field-label">Rule label</span>
+          <input name="rule_name" type="text" placeholder="Shown as the BP reason">
+        </label>
+        <button class="primary-button" type="submit">Save BP rule</button>
+      </form>
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Rule tester</p>
+          <h2>Would this row classify as BP?</h2>
+        </div>
+      </div>
+      <form class="form-stack" action="{{ url_for('preview_brand_partner_rule') }}" method="post">
+        <input type="hidden" name="q" value="{{ search_query }}">
+        <label class="field">
+          <span class="field-label">SKU name</span>
+          <input name="sku_name" type="text" value="{{ preview.sku_name if preview else '' }}" placeholder="Pep-up or master SKU" required>
+        </label>
+        <label class="field">
+          <span class="field-label">Store name</span>
+          <input name="store_name" type="text" value="{{ preview.store_name if preview else '' }}" placeholder="Optional store">
+        </label>
+        <label class="field">
+          <span class="field-label">Raw reference</span>
+          <input name="raw_reference_no" type="text" value="{{ preview.raw_reference_no if preview else '' }}" placeholder="17575653">
+        </label>
+        <label class="field">
+          <span class="field-label">Fallback product</span>
+          <select name="product_id">
+            <option value="">No fallback product</option>
+            {% for product in all_products %}
+              <option value="{{ product.id }}" {% if preview and preview.product and preview.product.id == product.id %}selected{% endif %}>{{ product.sku_name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button class="secondary-button" type="submit">Run classification test</button>
+      </form>
+
+      {% if preview %}
+        <div class="delivery-run-empty">
+          <span class="invoice-pill invoice-pill-{{ (preview.invoice_category or 'pending')|lower }}">{{ preview.invoice_category or 'No match' }}</span>
+          <h3>{{ preview.prefixed_reference_no or 'No prefixed reference yet' }}</h3>
+          <p class="empty-state">
+            {% if preview.classification_source == 'bp_rule' %}
+              Matched a BP rule{% if preview.bp_rule_reason %}: {{ preview.bp_rule_reason }}{% endif %}.
+            {% elif preview.classification_source == 'product_vat' %}
+              No BP rule matched, so the fallback product VAT setting would make this {{ preview.invoice_category }}.
+            {% else %}
+              No BP rule matched yet. Add a rule if this line should become BP.
+            {% endif %}
+          </p>
+        </div>
+      {% endif %}
+    </article>
+  </section>
+
+  <section class="glass-card">
+    <div class="module-head compact">
+      <div>
+        <p class="eyebrow">Active rules</p>
+        <h2>Brand Partner routing table</h2>
+      </div>
+    </div>
+
+    <form class="database-search-form" action="{{ url_for('brand_partner_rules_home') }}" method="get">
+      <label class="database-search-field" for="bp-rule-search">
+        <span class="field-label">Search rules</span>
+        <input id="bp-rule-search" name="q" type="search" value="{{ search_query }}" placeholder="Search SKU, store, or label">
+      </label>
+      <button class="secondary-button" type="submit">Search</button>
+      {% if search_query %}
+        <a class="secondary-button secondary-button-ghost" href="{{ url_for('brand_partner_rules_home') }}">Clear</a>
+      {% endif %}
+    </form>
+
+    {% if rules %}
+      <div class="data-table line-table database-rules-table">
+        <div class="table-line table-head-line table-line-rule admin-table-head">
+          <span>SKU pattern</span>
+          <span>Store pattern</span>
+          <span>Rule label</span>
+          <span>Remove</span>
+        </div>
+        {% for rule in rules %}
+          <div class="table-line table-line-rule admin-table-row">
+            <span><strong>{{ rule.sku_name_pattern }}</strong></span>
+            <span>{{ rule.store_name_pattern or 'All stores' }}</span>
+            <span>{{ rule.rule_name or 'No label' }}</span>
+            <span>
+              <form action="{{ url_for('deactivate_brand_partner_rule', rule_id=rule.id) }}" method="post">
+                <input type="hidden" name="q" value="{{ search_query }}">
+                <input type="hidden" name="return_to" value="bp_rules">
+                <button class="text-button danger" type="submit">Remove</button>
+              </form>
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">No Brand Partner rules match this view yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}

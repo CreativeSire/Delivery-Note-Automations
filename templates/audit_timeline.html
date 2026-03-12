@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}Audit Timeline | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="hero-band">
+    <div>
+      <p class="eyebrow">Audit timeline</p>
+      <h1>See who changed what across Database, Sales Order, SKU Automator, Delivery Note, and Loading Tracker.</h1>
+      <p class="page-copy">Use this as the cross-module trust layer: imports, reviews, exports, source changes, and planning moves all land here in one readable stream.</p>
+    </div>
+    <div class="actions">
+      <a class="secondary-button" href="{{ url_for('index') }}">Back to Dashboard</a>
+      <a class="secondary-button" href="{{ url_for('product_master') }}">Open Database</a>
+    </div>
+  </section>
+
+  <section class="stat-row">
+    <article class="glass-card stat-card">
+      <span class="panel-label">Timeline events</span>
+      <strong>{{ timeline.total_events }}</strong>
+      <small>latest entries in view</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Module filters</span>
+      <strong>{{ timeline.module_counts|length }}</strong>
+      <small>active modules in the feed</small>
+    </article>
+  </section>
+
+  <section class="glass-card">
+    <div class="module-head compact">
+      <div>
+        <p class="eyebrow">Filter</p>
+        <h2>Module view</h2>
+      </div>
+    </div>
+    <div class="chip-row">
+      <a class="database-toolbar-pill {% if not timeline.selected_module %}is-active{% endif %}" href="{{ url_for('audit_timeline') }}">All</a>
+      {% for item in timeline.module_counts %}
+        <a class="database-toolbar-pill {% if timeline.selected_module == item.module_name %}is-active{% endif %}" href="{{ url_for('audit_timeline', module=item.module_name) }}">
+          {{ item.module_name }} {{ item.count }}
+        </a>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="glass-card">
+    <div class="module-head compact">
+      <div>
+        <p class="eyebrow">Recent events</p>
+        <h2>Cross-module history</h2>
+      </div>
+    </div>
+    {% if timeline.events %}
+      <div class="warning-stack audit-timeline-stack">
+        {% for event in timeline.events %}
+          <article class="warning-row warning-row-rich audit-event-card">
+            <div class="audit-event-head">
+              <div>
+                <span class="mini-chip">{{ event.module_name }}</span>
+                <strong>{{ event.entity_name }}</strong>
+              </div>
+              <span class="review-subtle">{{ event.created_at.strftime('%Y-%m-%d %H:%M') if event.created_at else '' }}</span>
+            </div>
+            <p class="empty-state">{{ event.summary_text }}</p>
+            <div class="chip-row">
+              <span class="info-chip">{{ event.event_type }}</span>
+              {% for key, value in (event.details or {}).items() %}
+                <span class="database-toolbar-pill">{{ key.replace('_', ' ') }}: {{ value }}</span>
+              {% endfor %}
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">No audit events have been logged yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}

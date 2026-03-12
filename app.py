@@ -12,6 +12,7 @@ from flask import Flask, abort, flash, jsonify, redirect, render_template, reque
 from sqlalchemy import or_
 from werkzeug.utils import secure_filename
 
+from audit_services import build_audit_timeline, record_audit_event
 from loading_tracker_services import (
     DAY_SHEET_NAMES,
     LoadingTrackerError,
@@ -51,21 +52,26 @@ from loading_tracker_services import (
     save_loading_tracker_row,
     serialize_loading_tracker_import_job,
 )
-from models import BrandPartnerRule, Product, ProductAlias, db, ensure_runtime_schema
+from models import BrandPartnerRule, Product, ProductAlias, UomImportReview, db, ensure_runtime_schema
 from services import (
     ServiceError,
     WorkbookShapeError,
+    apply_uom_import_review,
     apply_review_decisions,
     bootstrap_seed_uom_if_empty,
     build_dashboard_summary,
     build_ignored_history_summary,
     build_run_summary,
     create_tracker_run,
+    discard_uom_import_review,
     export_ignored_history_to_xls,
     export_run_to_xls,
+    get_pending_uom_import_review,
+    get_uom_import_review,
     import_uom_workbook,
     list_brand_partner_rules,
     mark_source_sku_inactive,
+    preview_brand_partner_classification,
     save_product_master_entry,
     save_brand_partner_rule,
     set_brand_partner_rule_active,
@@ -129,6 +135,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         summary = build_dashboard_summary()
         correction_matches: list[ProductAlias] = []
         brand_partner_rules = list_brand_partner_rules()
+        pending_uom_review = get_pending_uom_import_review()
 
         active_query = db.session.query(Product).filter(Product.is_active.is_(True))
         inactive_query = db.session.query(Product).filter(Product.is_active.is_(False))
@@ -174,6 +181,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             inactive_products=inactive_products,
             correction_matches=correction_matches,
             brand_partner_rules=brand_partner_rules,
+            pending_uom_review=pending_uom_review,
             inactive_preview_limited=not search_query and summary.inactive_product_count > len(inactive_products),
             search_query=search_query,
             summary=summary,
@@ -192,6 +200,74 @@ def create_app(test_config: dict | None = None) -> Flask:
             loading_summary=loading_summary,
             tracker_overview=tracker_overview,
             latest_tracker_import=latest_tracker_import,
+        )
+
+    @app.get("/audit")
+    def audit_timeline() -> str:
+        selected_module = request.args.get("module", "").strip() or None
+        timeline = build_audit_timeline(module_name=selected_module)
+        return render_template("audit_timeline.html", timeline=timeline)
+
+    @app.get("/bp-rules")
+    def brand_partner_rules_home() -> str:
+        search_query = request.args.get("q", "").strip()
+        preview = None
+        rules = list_brand_partner_rules()
+        if search_query:
+            lowered = search_query.lower()
+            rules = [
+                rule
+                for rule in rules
+                if lowered in (rule.sku_name_pattern or "").lower()
+                or lowered in (rule.store_name_pattern or "").lower()
+                or lowered in (rule.rule_name or "").lower()
+            ]
+
+        all_products = list(
+            db.session.query(Product).filter(Product.is_active.is_(True)).order_by(Product.sku_name.asc())
+        )
+        return render_template(
+            "bp_rules.html",
+            rules=rules,
+            search_query=search_query,
+            preview=preview,
+            all_products=all_products,
+        )
+
+    @app.post("/bp-rules/test")
+    def preview_brand_partner_rule() -> str:
+        search_query = request.form.get("q", "").strip()
+        sku_name = request.form.get("sku_name", "").strip()
+        store_name = request.form.get("store_name", "").strip()
+        raw_reference_no = request.form.get("raw_reference_no", "").strip()
+        product_id_raw = request.form.get("product_id", "").strip()
+        product_id = int(product_id_raw) if product_id_raw.isdigit() else None
+
+        rules = list_brand_partner_rules()
+        if search_query:
+            lowered = search_query.lower()
+            rules = [
+                rule
+                for rule in rules
+                if lowered in (rule.sku_name_pattern or "").lower()
+                or lowered in (rule.store_name_pattern or "").lower()
+                or lowered in (rule.rule_name or "").lower()
+            ]
+        all_products = list(
+            db.session.query(Product).filter(Product.is_active.is_(True)).order_by(Product.sku_name.asc())
+        )
+        preview = preview_brand_partner_classification(
+            sku_name=sku_name,
+            store_name=store_name or None,
+            raw_reference_no=raw_reference_no or None,
+            product_id=product_id,
+        )
+        return render_template(
+            "bp_rules.html",
+            rules=rules,
+            search_query=search_query,
+            preview=preview,
+            all_products=all_products,
         )
 
     @app.get("/sales-order")
@@ -216,9 +292,29 @@ def create_app(test_config: dict | None = None) -> Flask:
             flash("No usable order rows were found in the uploaded workbook.", "error")
             return redirect(url_for("sales_order_home"))
         if run.rows_needing_review > 0:
+            record_audit_event(
+                module_name="Sales Order",
+                event_type="run_created",
+                entity_type="sales_order_run",
+                entity_id=run.id,
+                entity_name=run.original_filename,
+                summary_text=f"Imported Sales Order workbook '{run.original_filename}' with {run.row_count} rows and {run.rows_needing_review} review item(s).",
+                details={"row_count": run.row_count, "rows_ready": run.rows_ready, "rows_needing_review": run.rows_needing_review},
+            )
+            db.session.commit()
             flash("Sales Order uploaded. Some SKUs need review before export.", "warning")
             return redirect(url_for("review_sales_order_run", run_id=run.id))
 
+        record_audit_event(
+            module_name="Sales Order",
+            event_type="run_created",
+            entity_type="sales_order_run",
+            entity_id=run.id,
+            entity_name=run.original_filename,
+            summary_text=f"Imported Sales Order workbook '{run.original_filename}' with {run.row_count} ready rows.",
+            details={"row_count": run.row_count, "rows_ready": run.rows_ready, "rows_needing_review": run.rows_needing_review},
+        )
+        db.session.commit()
         flash("Sales Order run created and ready for Tally export.", "success")
         return redirect(url_for("view_sales_order_run", run_id=run.id))
 
@@ -262,6 +358,16 @@ def create_app(test_config: dict | None = None) -> Flask:
             flash(str(exc), "error")
             return redirect(url_for("review_sales_order_run", run_id=run_id))
 
+        record_audit_event(
+            module_name="Sales Order",
+            event_type="review_applied",
+            entity_type="sales_order_run",
+            entity_id=run.id,
+            entity_name=run.original_filename,
+            summary_text=f"Completed Sales Order review for '{run.original_filename}'. {run.rows_ready} row(s) are ready.",
+            details={"rows_ready": run.rows_ready, "rows_needing_review": run.rows_needing_review},
+        )
+        db.session.commit()
         flash(f"Review saved. {run.rows_ready} rows are now ready for export.", "success")
         return redirect(url_for("view_sales_order_run", run_id=run_id))
 
@@ -272,6 +378,16 @@ def create_app(test_config: dict | None = None) -> Flask:
         except WorkflowError as exc:
             flash(str(exc), "error")
             return redirect(url_for("view_sales_order_run", run_id=run_id))
+
+        record_audit_event(
+            module_name="Sales Order",
+            event_type="exported",
+            entity_type="sales_order_run",
+            entity_id=run_id,
+            entity_name=filename,
+            summary_text=f"Exported Sales Order workbook '{filename}'.",
+        )
+        db.session.commit()
 
         return send_file(
             BytesIO(payload),
@@ -302,9 +418,29 @@ def create_app(test_config: dict | None = None) -> Flask:
             flash("No voucher lines were found in the uploaded Tally export.", "error")
             return redirect(url_for("sku_automator_home"))
         if run.rows_needing_review > 0:
+            record_audit_event(
+                module_name="SKU Automator",
+                event_type="run_created",
+                entity_type="sku_automator_run",
+                entity_id=run.id,
+                entity_name=run.original_filename,
+                summary_text=f"Imported SKU Automator register '{run.original_filename}' with {run.line_count} lines and {run.rows_needing_review} review item(s).",
+                details={"line_count": run.line_count, "rows_ready": run.rows_ready, "rows_needing_review": run.rows_needing_review},
+            )
+            db.session.commit()
             flash("SKU Automator run created. Some SKUs need review before export.", "warning")
             return redirect(url_for("review_sku_automator_run", run_id=run.id))
 
+        record_audit_event(
+            module_name="SKU Automator",
+            event_type="run_created",
+            entity_type="sku_automator_run",
+            entity_id=run.id,
+            entity_name=run.original_filename,
+            summary_text=f"Imported SKU Automator register '{run.original_filename}' with {run.line_count} ready lines.",
+            details={"line_count": run.line_count, "rows_ready": run.rows_ready, "rows_needing_review": run.rows_needing_review},
+        )
+        db.session.commit()
         flash("SKU Automator run created and ready for planner output.", "success")
         return redirect(url_for("view_sku_automator_run", run_id=run.id))
 
@@ -349,6 +485,15 @@ def create_app(test_config: dict | None = None) -> Flask:
             "The SKU Automator matrix is now a live Loading Tracker week. Pending and remaining stock were carried forward where available.",
             "success",
         )
+        record_audit_event(
+            module_name="Loading Tracker",
+            event_type="week_seeded_from_sku_automator",
+            entity_type="loading_tracker_import",
+            entity_id=tracker_import.id,
+            entity_name=tracker_import.week_label,
+            summary_text=f"Created Loading Tracker week '{tracker_import.week_label}' from SKU Automator run {run_id}.",
+        )
+        db.session.commit()
         return redirect(url_for("loading_tracker_import_view", import_id=tracker_import.id))
 
     @app.get("/sku-automator/runs/<run_id>/review")
@@ -384,6 +529,16 @@ def create_app(test_config: dict | None = None) -> Flask:
             flash(str(exc), "error")
             return redirect(url_for("review_sku_automator_run", run_id=run_id))
 
+        record_audit_event(
+            module_name="SKU Automator",
+            event_type="review_applied",
+            entity_type="sku_automator_run",
+            entity_id=run.id,
+            entity_name=run.original_filename,
+            summary_text=f"Completed SKU Automator review for '{run.original_filename}'. {run.rows_ready} line(s) are ready.",
+            details={"rows_ready": run.rows_ready, "rows_needing_review": run.rows_needing_review},
+        )
+        db.session.commit()
         flash(f"Review saved. {run.rows_ready} rows are now ready for export.", "success")
         return redirect(url_for("view_sku_automator_run", run_id=run_id))
 
@@ -394,6 +549,16 @@ def create_app(test_config: dict | None = None) -> Flask:
         except WorkflowError as exc:
             flash(str(exc), "error")
             return redirect(url_for("view_sku_automator_run", run_id=run_id))
+
+        record_audit_event(
+            module_name="SKU Automator",
+            event_type="exported",
+            entity_type="sku_automator_run",
+            entity_id=run_id,
+            entity_name=filename,
+            summary_text=f"Exported SKU Automator workbook '{filename}'.",
+        )
+        db.session.commit()
 
         return send_file(
             BytesIO(payload),
@@ -427,6 +592,16 @@ def create_app(test_config: dict | None = None) -> Flask:
             flash(str(exc), "error")
             return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
 
+        record_audit_event(
+            module_name="Database",
+            event_type="product_created",
+            entity_type="product",
+            entity_id=str(product.id),
+            entity_name=product.sku_name,
+            summary_text=f"Added '{product.sku_name}' to the product master.",
+            details={"vatable": bool(product.vatable), "uom": product.uom or "", "price": str(product.price or "")},
+        )
+        db.session.commit()
         flash(f"'{product.sku_name}' was added to the product master.", "success")
         return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
 
@@ -451,6 +626,16 @@ def create_app(test_config: dict | None = None) -> Flask:
                 else url_for("edit_product", product_id=product_id)
             )
 
+        record_audit_event(
+            module_name="Database",
+            event_type="product_updated",
+            entity_type="product",
+            entity_id=str(product.id),
+            entity_name=product.sku_name,
+            summary_text=f"Updated '{product.sku_name}' in the product master.",
+            details={"vatable": bool(product.vatable), "uom": product.uom or "", "price": str(product.price or "")},
+        )
+        db.session.commit()
         flash(f"'{product.sku_name}' was updated.", "success")
         return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
 
@@ -463,6 +648,15 @@ def create_app(test_config: dict | None = None) -> Flask:
             flash(str(exc), "error")
             return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
 
+        record_audit_event(
+            module_name="Database",
+            event_type="product_deactivated",
+            entity_type="product",
+            entity_id=str(product.id),
+            entity_name=product.sku_name,
+            summary_text=f"Moved '{product.sku_name}' out of the active product master.",
+        )
+        db.session.commit()
         flash(f"'{product.sku_name}' was removed from the active product master.", "warning")
         return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
 
@@ -475,32 +669,65 @@ def create_app(test_config: dict | None = None) -> Flask:
             flash(str(exc), "error")
             return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
 
+        record_audit_event(
+            module_name="Database",
+            event_type="product_reactivated",
+            entity_type="product",
+            entity_id=str(product.id),
+            entity_name=product.sku_name,
+            summary_text=f"Restored '{product.sku_name}' into the active product master.",
+        )
+        db.session.commit()
         flash(f"'{product.sku_name}' is active again.", "success")
         return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
 
     @app.post("/bp-rules")
     def create_brand_partner_rule() -> str:
         search_query = request.form.get("q", "").strip()
+        return_to = request.form.get("return_to", "").strip()
+        redirect_endpoint = "brand_partner_rules_home" if return_to == "bp_rules" else "product_master"
         try:
             rule = save_brand_partner_rule(dict(request.form))
         except ServiceError as exc:
             flash(str(exc), "error")
-            return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
+            return redirect(url_for(redirect_endpoint, q=search_query) if search_query else url_for(redirect_endpoint))
 
+        record_audit_event(
+            module_name="Database",
+            event_type="bp_rule_created",
+            entity_type="bp_rule",
+            entity_id=str(rule.id),
+            entity_name=rule.sku_name_pattern,
+            summary_text=f"Added Brand Partner rule for '{rule.sku_name_pattern}'.",
+            details={"store_name_pattern": rule.store_name_pattern or "", "rule_name": rule.rule_name or ""},
+        )
+        db.session.commit()
         flash(f"Brand Partner rule saved for '{rule.sku_name_pattern}'.", "success")
-        return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
+        return redirect(url_for(redirect_endpoint, q=search_query) if search_query else url_for(redirect_endpoint))
 
     @app.post("/bp-rules/<int:rule_id>/deactivate")
     def deactivate_brand_partner_rule(rule_id: int) -> str:
         search_query = request.form.get("q", "").strip()
+        return_to = request.form.get("return_to", "").strip()
+        redirect_endpoint = "brand_partner_rules_home" if return_to == "bp_rules" else "product_master"
         try:
             rule = set_brand_partner_rule_active(rule_id, False)
         except ServiceError as exc:
             flash(str(exc), "error")
-            return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
+            return redirect(url_for(redirect_endpoint, q=search_query) if search_query else url_for(redirect_endpoint))
 
+        record_audit_event(
+            module_name="Database",
+            event_type="bp_rule_removed",
+            entity_type="bp_rule",
+            entity_id=str(rule.id),
+            entity_name=rule.sku_name_pattern,
+            summary_text=f"Removed Brand Partner rule for '{rule.sku_name_pattern}'.",
+            details={"store_name_pattern": rule.store_name_pattern or "", "rule_name": rule.rule_name or ""},
+        )
+        db.session.commit()
         flash(f"Brand Partner rule for '{rule.sku_name_pattern}' was removed.", "warning")
-        return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
+        return redirect(url_for(redirect_endpoint, q=search_query) if search_query else url_for(redirect_endpoint))
 
     @app.post("/uom/import")
     def upload_uom() -> str:
@@ -512,13 +739,39 @@ def create_app(test_config: dict | None = None) -> Flask:
             return redirect(url_for(redirect_target))
 
         try:
-            import_log = import_uom_workbook(uploaded_file)
+            outcome = import_uom_workbook(uploaded_file)
         except ServiceError as exc:
             flash(str(exc), "error")
             return redirect(url_for(redirect_target))
 
+        if outcome.review is not None:
+            flash(
+                "UOM review ready. Please confirm the renamed or missing products before this source replaces the live catalog.",
+                "warning",
+            )
+            return redirect(url_for("view_uom_review", review_id=outcome.review.id))
+
+        import_log = outcome.import_log
+        if import_log is None:
+            flash("The UOM import did not produce a review or an applied source update.", "error")
+            return redirect(url_for(redirect_target))
+
         skipped = getattr(import_log, "skipped_count", 0)
         deactivated = getattr(import_log, "deactivated_count", 0)
+        record_audit_event(
+            module_name="Database",
+            event_type="uom_import_applied",
+            entity_type="uom_import",
+            entity_id=str(import_log.id),
+            entity_name=import_log.filename,
+            summary_text=f"Applied UOM source '{import_log.filename}' with {import_log.product_count} active rows.",
+            details={
+                "product_count": import_log.product_count,
+                "skipped_count": skipped,
+                "deactivated_count": deactivated,
+            },
+        )
+        db.session.commit()
         if skipped or deactivated:
             parts = [f"{import_log.product_count} new product rows were added"]
             if skipped:
@@ -532,6 +785,46 @@ def create_app(test_config: dict | None = None) -> Flask:
         else:
             flash(f"UOM import complete. {import_log.product_count} product rows were saved.", "success")
         return redirect(url_for(redirect_target))
+
+    @app.get("/uom/reviews/<review_id>")
+    def view_uom_review(review_id: str) -> str:
+        review = get_uom_import_review(review_id)
+        if review is None:
+            abort(404)
+        return render_template("uom_review.html", review=review)
+
+    @app.post("/uom/reviews/<review_id>/apply")
+    def submit_uom_review(review_id: str) -> str:
+        review = get_uom_import_review(review_id)
+        if review is None:
+            abort(404)
+
+        decisions = {
+            str(item["product_id"]): request.form.get(f"decision::{item['product_id']}", "").strip()
+            for item in (review.missing_products_json or [])
+        }
+        try:
+            _, import_log = apply_uom_import_review(review_id, decisions)
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("view_uom_review", review_id=review_id))
+
+        flash(
+            f"UOM review applied. {import_log.product_count} active rows now define the live source of truth.",
+            "success",
+        )
+        return redirect(url_for("product_master"))
+
+    @app.post("/uom/reviews/<review_id>/discard")
+    def cancel_uom_review(review_id: str) -> str:
+        try:
+            discard_uom_import_review(review_id)
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("view_uom_review", review_id=review_id))
+
+        flash("The pending UOM review was dismissed. The live product master stayed unchanged.", "warning")
+        return redirect(url_for("product_master"))
 
     @app.post("/runs/import")
     def upload_tracker() -> str:
@@ -551,9 +844,29 @@ def create_app(test_config: dict | None = None) -> Flask:
             return redirect(url_for("delivery_note_home"))
 
         if run.rows_needing_review > 0:
+            record_audit_event(
+                module_name="Delivery Note",
+                event_type="run_created",
+                entity_type="delivery_note_run",
+                entity_id=run.id,
+                entity_name=run.original_filename,
+                summary_text=f"Imported Delivery Note tracker '{run.original_filename}' with {run.rows_detected} rows and {run.rows_needing_review} review item(s).",
+                details={"rows_detected": run.rows_detected, "rows_ready": run.rows_ready, "rows_needing_review": run.rows_needing_review},
+            )
+            db.session.commit()
             flash("Tracker uploaded. Some SKUs need review before export.", "warning")
             return redirect(url_for("review_run", run_id=run.id))
 
+        record_audit_event(
+            module_name="Delivery Note",
+            event_type="run_created",
+            entity_type="delivery_note_run",
+            entity_id=run.id,
+            entity_name=run.original_filename,
+            summary_text=f"Imported Delivery Note tracker '{run.original_filename}' with {run.rows_ready} ready rows.",
+            details={"rows_detected": run.rows_detected, "rows_ready": run.rows_ready, "rows_needing_review": run.rows_needing_review},
+        )
+        db.session.commit()
         flash("Tracker uploaded and matched successfully.", "success")
         return redirect(url_for("view_run", run_id=run.id))
 
@@ -614,6 +927,16 @@ def create_app(test_config: dict | None = None) -> Flask:
             flash(str(exc), "error")
             return redirect(url_for("review_run", run_id=run_id))
 
+        record_audit_event(
+            module_name="Delivery Note",
+            event_type="review_applied",
+            entity_type="delivery_note_run",
+            entity_id=run.id,
+            entity_name=run.original_filename,
+            summary_text=f"Completed Delivery Note review for '{run.original_filename}'. {run.rows_ready} row(s) are ready.",
+            details={"rows_ready": run.rows_ready, "rows_needing_review": run.rows_needing_review},
+        )
+        db.session.commit()
         flash(f"Review saved. {run.rows_ready} rows are now ready for export.", "success")
         return redirect(url_for("view_run", run_id=run_id))
 
@@ -625,6 +948,17 @@ def create_app(test_config: dict | None = None) -> Flask:
         except WorkbookShapeError as exc:
             flash(str(exc), "error")
             return redirect(url_for("view_run", run_id=run_id))
+
+        record_audit_event(
+            module_name="Delivery Note",
+            event_type="exported",
+            entity_type="delivery_note_run",
+            entity_id=run_id,
+            entity_name=filename,
+            summary_text=f"Exported Delivery Note file '{filename}'.",
+            details={"invoice_category": invoice_category or "all"},
+        )
+        db.session.commit()
 
         return send_file(
             BytesIO(payload),
@@ -640,6 +974,16 @@ def create_app(test_config: dict | None = None) -> Flask:
         except WorkbookShapeError as exc:
             flash(str(exc), "error")
             return redirect(url_for("view_run", run_id=run_id))
+
+        record_audit_event(
+            module_name="Delivery Note",
+            event_type="ignored_exported",
+            entity_type="delivery_note_run",
+            entity_id=run_id,
+            entity_name=filename,
+            summary_text=f"Downloaded ignored-item history for run {run_id}.",
+        )
+        db.session.commit()
 
         return send_file(
             BytesIO(payload),

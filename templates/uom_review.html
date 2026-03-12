@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block title %}UOM Review | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="hero-band">
+    <div>
+      <p class="eyebrow">Database · UOM review</p>
+      <h1>Confirm rename candidates and missing products before this source becomes live.</h1>
+      <p class="page-copy">This review queue appears only when the incoming source would otherwise push current UOM-backed products into Removed products. Merge obvious renames, keep anything that should stay live, and only then apply the refresh.</p>
+    </div>
+    <div class="actions">
+      <a class="secondary-button" href="{{ url_for('product_master') }}">Back to Database</a>
+      <span class="hero-chip">{{ review.filename }}</span>
+    </div>
+  </section>
+
+  <section class="stat-row">
+    <article class="glass-card stat-card">
+      <span class="panel-label">Incoming rows</span>
+      <strong>{{ review.row_count }}</strong>
+      <small>parsed from the new source</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Direct matches</span>
+      <strong>{{ review.matched_count }}</strong>
+      <small>already safe to update</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">At-risk products</span>
+      <strong>{{ review.missing_count }}</strong>
+      <small>would be affected without review</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Rename suggestions</span>
+      <strong>{{ review.rename_candidate_count }}</strong>
+      <small>recommended merge candidates</small>
+    </article>
+  </section>
+
+  <section class="glass-card">
+    <div class="module-head compact">
+      <div>
+        <p class="eyebrow">Review queue</p>
+        <h2>Missing or renamed products</h2>
+      </div>
+    </div>
+
+    <form class="form-stack" action="{{ url_for('submit_uom_review', review_id=review.id) }}" method="post">
+      <div class="warning-stack">
+        {% for item in review.missing_products_json %}
+          <article class="warning-row warning-row-rich">
+            <div>
+              <strong>{{ item.sku_name }}</strong>
+              <small>{{ item.uom or 'No UOM' }}{% if item.price %} · {{ item.price }}{% endif %}</small>
+            </div>
+            <div class="uom-review-decision">
+              {% if item.suggested_incoming_sku %}
+                <span class="info-chip">Suggested rename</span>
+                <p class="empty-state">{{ item.suggested_incoming_sku }} · {{ item.suggested_reason }}{% if item.suggested_score %} · {{ item.suggested_score }}{% endif %}</p>
+              {% else %}
+                <span class="info-chip">No rename suggestion</span>
+              {% endif %}
+              <label class="field">
+                <span class="field-label">Decision</span>
+                <select name="decision::{{ item.product_id }}">
+                  {% if item.suggested_incoming_sku %}
+                    <option value="merge::{{ item.suggested_incoming_sku }}">Merge into {{ item.suggested_incoming_sku }} (Recommended)</option>
+                  {% endif %}
+                  <option value="keep">Keep active for now</option>
+                  <option value="inactive" {% if not item.suggested_incoming_sku %}selected{% endif %}>Mark inactive</option>
+                </select>
+              </label>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+
+      <div class="actions">
+        <button class="primary-button" type="submit">Apply reviewed UOM source</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="content-split">
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">New rows</p>
+          <h2>Incoming rows that would stay separate</h2>
+        </div>
+      </div>
+      {% if review.unmatched_rows_json %}
+        <div class="data-table line-table">
+          <div class="table-line table-head-line table-line-rule admin-table-head">
+            <span>Incoming SKU</span>
+            <span>Pack</span>
+            <span>Rate</span>
+          </div>
+          {% for item in review.unmatched_rows_json[:30] %}
+            <div class="table-line table-line-rule admin-table-row">
+              <span>{{ item.sku_name }}</span>
+              <span>{{ item.uom or '-' }}{% if item.conversion %} · {{ item.conversion }}{% endif %}</span>
+              <span>{{ item.price or '-' }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">Every incoming row already matched something in the current catalog.</p>
+      {% endif %}
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">No change</p>
+          <h2>Dismiss this review</h2>
+        </div>
+      </div>
+      <p class="page-copy">Use this only if the uploaded source should not replace the live catalog yet. Dismissing the review leaves the active product master exactly as it is right now.</p>
+      <form action="{{ url_for('cancel_uom_review', review_id=review.id) }}" method="post">
+        <button class="secondary-button" type="submit">Dismiss review</button>
+      </form>
+    </article>
+  </section>
+{% endblock %}

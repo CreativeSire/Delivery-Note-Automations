@@ -9,6 +9,7 @@ from openpyxl import Workbook, load_workbook
 from app import _database_uri, create_app
 from loading_tracker_services import create_loading_tracker_import_job, run_loading_tracker_import_job
 from models import (
+    AuditEvent,
     BrandPartnerRule,
     LoadingTrackerDailyCount,
     LoadingTrackerDay,
@@ -24,6 +25,7 @@ from models import (
     SalesOrderRun,
     SkuAutomatorLine,
     SkuAutomatorRun,
+    UomImportReview,
     UploadRun,
     db,
 )
@@ -705,6 +707,9 @@ def test_uom_import_sets_active_source_of_truth() -> None:
             content_type="multipart/form-data",
         )
         assert response.status_code == 302
+        assert "/uom/reviews/" in response.headers["Location"]
+        review_apply = client.post(f"{response.headers['Location']}/apply", data={"decision::2": "inactive"})
+        assert review_apply.status_code == 302
 
         with app.app_context():
             alpha = db.session.query(Product).filter_by(sku_name="SKU Alpha").one()
@@ -885,6 +890,150 @@ def test_product_master_page_exposes_uom_import_and_redirects_back() -> None:
 
         with app.app_context():
             assert db.session.query(Product).count() == 2
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_uom_import_redirects_to_review_for_missing_source_rows() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+
+        original = Workbook()
+        sheet = original.active
+        sheet.title = "UOM"
+        sheet.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
+        sheet.append(["SKU Alpha", "ctn", "unt", 12, "Yes", 100])
+        sheet.append(["SKU Vanilla", "ctn", "unt", 12, "No", 80])
+        original_bytes = BytesIO()
+        original.save(original_bytes)
+        original_bytes.seek(0)
+
+        refreshed = Workbook()
+        next_sheet = refreshed.active
+        next_sheet.title = "UOM"
+        next_sheet.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
+        next_sheet.append(["SKU Alpha", "ctn", "unt", 12, "Yes", 120])
+        refreshed_bytes = BytesIO()
+        refreshed.save(refreshed_bytes)
+        refreshed_bytes.seek(0)
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(original_bytes.getvalue()), "uom-old.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(refreshed_bytes.getvalue()), "uom-new.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "Confirm rename candidates and missing products" in html
+        assert "SKU Vanilla" in html
+
+        with app.app_context():
+            review = db.session.query(UomImportReview).filter_by(status="pending").one()
+            assert review.missing_count == 1
+            assert db.session.query(AuditEvent).filter_by(event_type="uom_review_created").count() == 1
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_brand_partner_rules_workspace_can_preview_classification() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(build_loading_tracker_uom_workbook().getvalue()), "uom.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        response = client.post(
+            "/bp-rules",
+            data={
+                "return_to": "bp_rules",
+                "sku_name_pattern": "SKU Alpha",
+                "store_name_pattern": "Market One",
+                "rule_name": "Alpha BP",
+            },
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert "Brand Partner rule saved" in response.get_data(as_text=True)
+
+        response = client.post(
+            "/bp-rules/test",
+            data={
+                "sku_name": "SKU Alpha",
+                "store_name": "Market One",
+                "raw_reference_no": "17575653",
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "BP-17575653" in html
+        assert "Alpha BP" in html
+
+        with app.app_context():
+            assert db.session.query(AuditEvent).filter_by(event_type="bp_rule_created").count() == 1
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_audit_timeline_shows_cross_module_admin_events() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        client.post(
+            "/products",
+            data={
+                "sku_name": "Audit Product",
+                "price": "1000",
+                "vatable": "no",
+                "uom": "ctn",
+                "alt_uom": "pcs",
+                "conversion": "12",
+            },
+        )
+
+        response = client.get("/audit")
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "Audit timeline" in html
+        assert "Audit Product" in html
+        assert "Database" in html
+
+        with app.app_context():
+            assert db.session.query(AuditEvent).filter_by(event_type="product_created").count() == 1
             db.session.remove()
             db.engine.dispose()
 
@@ -1079,6 +1228,13 @@ def test_uom_replace_sync_does_not_auto_merge_ambiguous_name_changes() -> None:
         )
 
         with app.app_context():
+            review = db.session.query(UomImportReview).filter_by(status="pending").one()
+            review_id = review.id
+            assert review.rename_candidate_count == 0
+        response = client.post(f"/uom/reviews/{review_id}/apply")
+        assert response.status_code == 302
+
+        with app.app_context():
             ambiguous = db.session.query(Product).filter_by(sku_name="AGS- Jadens Fruitamil (12x)").one()
             old_200g = db.session.query(Product).filter_by(sku_name="AGS- 200g Jadens Fruitamil (12x)").one()
             old_400g = db.session.query(Product).filter_by(sku_name="AGS- 400g Jadens Fruitamil (12x)").one()
@@ -1138,6 +1294,9 @@ def test_manual_product_stays_active_after_new_uom_import() -> None:
             content_type="multipart/form-data",
         )
         assert response.status_code == 302
+        assert "/uom/reviews/" in response.headers["Location"]
+        review_apply = client.post(f"{response.headers['Location']}/apply", data={"decision::2": "inactive"})
+        assert review_apply.status_code == 302
 
         with app.app_context():
             alpha = db.session.query(Product).filter_by(sku_name="SKU Alpha").one()

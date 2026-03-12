@@ -4,7 +4,7 @@ import csv
 import re
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from difflib import SequenceMatcher
 from io import BytesIO, StringIO
@@ -18,7 +18,8 @@ from flask import current_app
 from openpyxl import load_workbook
 from sqlalchemy import func, select, true
 
-from models import BrandPartnerRule, Product, ProductAlias, UploadLine, UploadRun, UomImport, db
+from audit_services import record_audit_event
+from models import BrandPartnerRule, Product, ProductAlias, UploadLine, UploadRun, UomImport, UomImportReview, db
 
 TRACKER_SHEET = "tracker"
 UOM_SHEET = "UOM"
@@ -124,6 +125,12 @@ class IgnoredHistorySummary:
     ignored_runs_for_sku: list[dict[str, Any]]
 
 
+@dataclass
+class UomImportOutcome:
+    import_log: UomImport | None
+    review: UomImportReview | None
+
+
 def build_dashboard_summary() -> DashboardSummary:
     latest_import = db.session.scalar(select(UomImport).order_by(UomImport.created_at.desc()).limit(1))
     return DashboardSummary(
@@ -146,6 +153,33 @@ def list_brand_partner_rules() -> list[BrandPartnerRule]:
             .order_by(BrandPartnerRule.sku_name_pattern.asc(), BrandPartnerRule.store_name_pattern.asc())
         )
     )
+
+
+def preview_brand_partner_classification(
+    *,
+    sku_name: str,
+    store_name: str | None,
+    raw_reference_no: str | None,
+    product_id: int | None = None,
+) -> dict[str, Any]:
+    product = db.session.get(Product, product_id) if product_id else None
+    classification = classify_invoice_line(
+        raw_reference_no=raw_reference_no,
+        store_name=store_name,
+        sku_name=sku_name,
+        product=product,
+        bp_rules=load_brand_partner_rules(),
+    )
+    return {
+        "sku_name": sku_name,
+        "store_name": store_name or "",
+        "raw_reference_no": raw_reference_no or "",
+        "product": product,
+        "invoice_category": classification.invoice_category or "",
+        "prefixed_reference_no": classification.prefixed_reference_no or "",
+        "classification_source": classification.classification_source or "",
+        "bp_rule_reason": classification.bp_rule_reason or "",
+    }
 
 
 def save_brand_partner_rule(form_data: dict[str, Any]) -> BrandPartnerRule:
@@ -192,7 +226,7 @@ def set_brand_partner_rule_active(rule_id: int, is_active: bool) -> BrandPartner
     return rule
 
 
-def import_uom_workbook(file_storage: Any) -> UomImport:
+def import_uom_workbook(file_storage: Any) -> UomImportOutcome:
     payload = _read_upload_payload(file_storage)
     filename = file_storage.filename or "uom.xlsx"
 
@@ -200,11 +234,17 @@ def import_uom_workbook(file_storage: Any) -> UomImport:
     if workbook is not None:
         rows = _extract_uom_workbook_rows(workbook)
         if rows is not None:
-            return import_uom_rows(rows, filename, mode="replace")
+            review = create_uom_import_review(rows, filename)
+            if review is not None:
+                return UomImportOutcome(import_log=None, review=review)
+            return UomImportOutcome(import_log=import_uom_rows(rows, filename, mode="replace"), review=None)
 
         stock_rows = _extract_stock_category_summary_rows(workbook)
         if stock_rows is not None:
-            return import_uom_rows(stock_rows, filename, mode="replace")
+            review = create_uom_import_review(stock_rows, filename)
+            if review is not None:
+                return UomImportOutcome(import_log=None, review=review)
+            return UomImportOutcome(import_log=import_uom_rows(stock_rows, filename, mode="replace"), review=None)
 
         raise WorkbookShapeError(
             f"The workbook must contain a '{UOM_SHEET}' sheet, a recognized UOM header layout, or a recognized 'Stock Category Summary' sheet."
@@ -212,18 +252,27 @@ def import_uom_workbook(file_storage: Any) -> UomImport:
 
     item_rows = _extract_item_list_rows(payload)
     if item_rows is not None:
-        return import_uom_rows(item_rows, filename, mode="merge")
+        return UomImportOutcome(import_log=import_uom_rows(item_rows, filename, mode="merge"), review=None)
 
     raise WorkbookShapeError(
         "The uploaded file must be a UOM workbook, a workbook with UOM-style headers, a Stock Category Summary workbook, or an item list export."
     )
 
 
-def import_uom_rows(rows: list[list[Any]], filename: str, mode: str = "replace") -> UomImport:
+def import_uom_rows(
+    rows: list[list[Any]],
+    filename: str,
+    mode: str = "replace",
+    *,
+    keep_active_product_ids: set[int] | None = None,
+    forced_product_matches: dict[str, int] | None = None,
+) -> UomImport:
     import_log = UomImport(filename=filename, product_count=0)
     db.session.add(import_log)
     db.session.flush()
 
+    protected_ids = keep_active_product_ids or set()
+    forced_matches = {str(key): value for key, value in (forced_product_matches or {}).items()}
     existing_products = {
         product.sku_name: product for product in db.session.scalars(select(Product))
     }
@@ -233,7 +282,7 @@ def import_uom_rows(rows: list[list[Any]], filename: str, mode: str = "replace")
         existing_by_normalized.setdefault(product.normalized_name, []).append(product)
         if product.source_import_id is not None:
             existing_by_sync_key.setdefault(normalize_uom_sync_key(product.sku_name), []).append(product)
-        if mode == "replace" and product.source_import_id is not None:
+        if mode == "replace" and product.source_import_id is not None and product.id not in protected_ids:
             product.is_active = False
 
     imported = 0
@@ -244,7 +293,13 @@ def import_uom_rows(rows: list[list[Any]], filename: str, mode: str = "replace")
         if not sku_name:
             continue
 
-        product = existing_products.get(sku_name)
+        product = None
+        forced_product_id = forced_matches.get(sku_name)
+        if forced_product_id is not None:
+            product = db.session.get(Product, forced_product_id)
+
+        if product is None:
+            product = existing_products.get(sku_name)
         normalized_name = normalize_sku(sku_name)
         sync_key = normalize_uom_sync_key(sku_name)
         is_active_row = True if len(row) < 7 else bool(row[6])
@@ -306,6 +361,194 @@ def import_uom_rows(rows: list[list[Any]], filename: str, mode: str = "replace")
     import_log.deactivated_count = deactivated
     db.session.commit()
     return import_log
+
+
+def create_uom_import_review(rows: list[list[Any]], filename: str) -> UomImportReview | None:
+    serialized_rows = [_serialize_uom_row(row) for row in rows if _string_value(row[0])]
+    if not serialized_rows:
+        return None
+
+    active_source_products = list(
+        db.session.scalars(
+            select(Product).where(Product.is_active.is_(True), Product.source_import_id.is_not(None)).order_by(Product.sku_name.asc())
+        )
+    )
+    if not active_source_products:
+        return None
+
+    matched_product_ids: set[int] = set()
+    unmatched_rows: list[dict[str, Any]] = []
+    existing_by_name = {product.sku_name: product for product in db.session.scalars(select(Product))}
+    existing_by_normalized: dict[str, list[Product]] = {}
+    existing_by_sync_key: dict[str, list[Product]] = {}
+    for product in db.session.scalars(select(Product)):
+        existing_by_normalized.setdefault(product.normalized_name, []).append(product)
+        if product.source_import_id is not None:
+            existing_by_sync_key.setdefault(normalize_uom_sync_key(product.sku_name), []).append(product)
+
+    for row in serialized_rows:
+        product = _match_existing_uom_product(
+            row["sku_name"],
+            existing_by_name=existing_by_name,
+            existing_by_normalized=existing_by_normalized,
+            existing_by_sync_key=existing_by_sync_key,
+        )
+        if product is not None:
+            matched_product_ids.add(product.id)
+            continue
+        unmatched_rows.append(row)
+
+    missing_products = [product for product in active_source_products if product.id not in matched_product_ids]
+    if not missing_products:
+        return None
+
+    suggestions = _suggest_uom_review_matches(missing_products, unmatched_rows)
+    missing_payload = []
+    for product in missing_products:
+        suggestion = suggestions.get(product.id)
+        missing_payload.append(
+            {
+                "product_id": product.id,
+                "sku_name": product.sku_name,
+                "price": _decimal_string(product.price),
+                "uom": product.uom or "",
+                "suggested_incoming_sku": suggestion["sku_name"] if suggestion else "",
+                "suggested_reason": suggestion["reason"] if suggestion else "",
+                "suggested_score": suggestion["score"] if suggestion else 0,
+            }
+        )
+
+    review = UomImportReview(
+        id=uuid4().hex,
+        filename=filename,
+        status="pending",
+        row_count=len(serialized_rows),
+        matched_count=len(matched_product_ids),
+        new_count=len(unmatched_rows),
+        missing_count=len(missing_products),
+        rename_candidate_count=sum(1 for item in missing_payload if item["suggested_incoming_sku"]),
+        rows_json=serialized_rows,
+        unmatched_rows_json=unmatched_rows,
+        missing_products_json=missing_payload,
+    )
+    db.session.add(review)
+    record_audit_event(
+        module_name="Database",
+        event_type="uom_review_created",
+        entity_type="uom_review",
+        entity_id=review.id,
+        entity_name=filename,
+        summary_text=(
+            f"UOM review created for {filename} with {review.missing_count} at-risk product"
+            f"{'' if review.missing_count == 1 else 's'}."
+        ),
+        details={
+            "row_count": review.row_count,
+            "matched_count": review.matched_count,
+            "new_count": review.new_count,
+            "missing_count": review.missing_count,
+            "rename_candidate_count": review.rename_candidate_count,
+        },
+    )
+    db.session.commit()
+    return review
+
+
+def get_uom_import_review(review_id: str) -> UomImportReview | None:
+    return db.session.get(UomImportReview, review_id)
+
+
+def get_pending_uom_import_review() -> UomImportReview | None:
+    return db.session.scalar(
+        select(UomImportReview)
+        .where(UomImportReview.status == "pending")
+        .order_by(UomImportReview.created_at.desc())
+        .limit(1)
+    )
+
+
+def apply_uom_import_review(review_id: str, decisions: dict[str, str]) -> tuple[UomImportReview, UomImport]:
+    review = db.session.get(UomImportReview, review_id)
+    if review is None:
+        raise ServiceError("That UOM review could not be found.")
+    if review.status != "pending":
+        raise ServiceError("That UOM review has already been applied or dismissed.")
+
+    keep_active_ids: set[int] = set()
+    forced_matches: dict[str, int] = {}
+    merged_count = 0
+    kept_count = 0
+    inactive_count = 0
+
+    for item in review.missing_products_json or []:
+        product_id = int(item["product_id"])
+        decision = (decisions.get(str(product_id)) or "").strip()
+        if not decision:
+            if item.get("suggested_incoming_sku"):
+                decision = f"merge::{item['suggested_incoming_sku']}"
+            else:
+                decision = "inactive"
+
+        if decision.startswith("merge::"):
+            incoming_sku = decision.split("::", 1)[1].strip()
+            if not incoming_sku:
+                raise ServiceError("A rename merge decision was missing its incoming SKU.")
+            forced_matches[incoming_sku] = product_id
+            merged_count += 1
+        elif decision == "keep":
+            keep_active_ids.add(product_id)
+            kept_count += 1
+        else:
+            inactive_count += 1
+
+    import_log = import_uom_rows(
+        [_deserialize_uom_row(item) for item in review.rows_json or []],
+        review.filename,
+        mode="replace",
+        keep_active_product_ids=keep_active_ids,
+        forced_product_matches=forced_matches,
+    )
+    review.status = "applied"
+    review.import_log_id = import_log.id
+    review.applied_at = datetime.now(UTC)
+    record_audit_event(
+        module_name="Database",
+        event_type="uom_review_applied",
+        entity_type="uom_review",
+        entity_id=review.id,
+        entity_name=review.filename,
+        summary_text=(
+            f"Applied reviewed UOM refresh for {review.filename}: {merged_count} merge"
+            f"{'' if merged_count == 1 else 's'}, {kept_count} kept active, {inactive_count} inactivated."
+        ),
+        details={
+            "import_log_id": import_log.id,
+            "merged_count": merged_count,
+            "kept_count": kept_count,
+            "inactive_count": inactive_count,
+        },
+    )
+    db.session.commit()
+    return review, import_log
+
+
+def discard_uom_import_review(review_id: str) -> UomImportReview:
+    review = db.session.get(UomImportReview, review_id)
+    if review is None:
+        raise ServiceError("That UOM review could not be found.")
+    if review.status != "pending":
+        raise ServiceError("Only pending UOM reviews can be dismissed.")
+    review.status = "discarded"
+    record_audit_event(
+        module_name="Database",
+        event_type="uom_review_discarded",
+        entity_type="uom_review",
+        entity_id=review.id,
+        entity_name=review.filename,
+        summary_text=f"Dismissed the pending UOM review for {review.filename}.",
+    )
+    db.session.commit()
+    return review
 
 
 def bootstrap_seed_uom_if_empty() -> UomImport | None:
@@ -887,6 +1130,101 @@ def normalize_uom_sync_key(value: str) -> str:
     return " ".join(sorted(tokens))
 
 
+def _match_existing_uom_product(
+    sku_name: str,
+    *,
+    existing_by_name: dict[str, Product],
+    existing_by_normalized: dict[str, list[Product]],
+    existing_by_sync_key: dict[str, list[Product]],
+) -> Product | None:
+    product = existing_by_name.get(sku_name)
+    if product is not None:
+        return product
+
+    normalized_name = normalize_sku(sku_name)
+    normalized_matches = existing_by_normalized.get(normalized_name, [])
+    if len(normalized_matches) == 1:
+        return normalized_matches[0]
+
+    sync_key = normalize_uom_sync_key(sku_name)
+    sync_matches = existing_by_sync_key.get(sync_key, [])
+    if len(sync_matches) == 1:
+        return sync_matches[0]
+    return None
+
+
+def _serialize_uom_row(row: list[Any]) -> dict[str, Any]:
+    return {
+        "sku_name": _string_value(row[0]),
+        "uom": _string_value(row[1]),
+        "alt_uom": _string_value(row[2]),
+        "conversion": _decimal_string(_decimal_value(row[3])),
+        "vatable": _string_value(row[4]),
+        "price": _decimal_string(_decimal_value(row[5])),
+        "is_active": True if len(row) < 7 else bool(row[6]),
+    }
+
+
+def _deserialize_uom_row(row: dict[str, Any]) -> list[Any]:
+    return [
+        row.get("sku_name", ""),
+        row.get("uom", ""),
+        row.get("alt_uom", ""),
+        row.get("conversion", ""),
+        row.get("vatable", ""),
+        row.get("price", ""),
+        bool(row.get("is_active", True)),
+    ]
+
+
+def _suggest_uom_review_matches(
+    missing_products: list[Product],
+    unmatched_rows: list[dict[str, Any]],
+) -> dict[int, dict[str, Any]]:
+    scored_pairs: list[tuple[float, int, str, str]] = []
+    for product in missing_products:
+        product_sync_key = normalize_uom_sync_key(product.sku_name)
+        product_normalized = normalize_sku(product.sku_name)
+        for row in unmatched_rows:
+            row_sku = row["sku_name"]
+            row_sync_key = normalize_uom_sync_key(row_sku)
+            row_normalized = normalize_sku(row_sku)
+            sync_score = SequenceMatcher(None, product_sync_key, row_sync_key).ratio()
+            name_score = SequenceMatcher(None, product_normalized, row_normalized).ratio()
+            exact_sync = product_sync_key and product_sync_key == row_sync_key
+            if exact_sync:
+                score = max(sync_score, name_score, 0.99)
+                reason = "Matching sync key after source-name cleanup"
+            else:
+                score = max(sync_score, name_score)
+                reason = "High name similarity"
+            if score < 0.62:
+                continue
+            scored_pairs.append((score, product.id, row_sku, reason))
+
+    row_scores: dict[str, list[tuple[float, int]]] = {}
+    for score, product_id, row_sku, _ in scored_pairs:
+        row_scores.setdefault(row_sku, []).append((score, product_id))
+
+    suggestions: dict[int, dict[str, Any]] = {}
+    used_rows: set[str] = set()
+    used_products: set[int] = set()
+    for score, product_id, row_sku, reason in sorted(scored_pairs, key=lambda item: (-item[0], item[1], item[2])):
+        if product_id in used_products or row_sku in used_rows:
+            continue
+        competing_scores = sorted(row_scores.get(row_sku, []), key=lambda item: item[0], reverse=True)
+        if len(competing_scores) > 1 and competing_scores[0][0] - competing_scores[1][0] < 0.08:
+            continue
+        suggestions[product_id] = {
+            "sku_name": row_sku,
+            "reason": reason,
+            "score": round(score, 2),
+        }
+        used_products.add(product_id)
+        used_rows.add(row_sku)
+    return suggestions
+
+
 def tomorrow_in_timezone(timezone_name: str) -> datetime:
     return datetime.now(ZoneInfo(timezone_name)) + timedelta(days=1)
 
@@ -1262,6 +1600,12 @@ def _decimal_value(value: Any) -> Decimal | None:
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
+
+
+def _decimal_string(value: Decimal | None) -> str:
+    if value is None:
+        return ""
+    return format(value.normalize(), "f") if value != value.to_integral() else str(value.quantize(Decimal("1")))
 
 
 def _resolve_tracker_sheet(workbook: Any):
