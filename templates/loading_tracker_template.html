@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block title %}Loading Tracker Template | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="page-header compact-header">
+    <div>
+      <p class="eyebrow">Loading Tracker Template</p>
+      <h1>Planner-owned week template</h1>
+      <p class="page-copy">This is the backend week template for Loading Tracker. Use this page to replace the stored workbook with a cleaned template copy, rename it for planners, and download the current clean version without touching a live imported week.</p>
+    </div>
+    <div class="header-chip">{% if template_record %}Template saved{% else %}Awaiting template{% endif %}</div>
+  </section>
+
+  <section class="content-grid content-grid-wide">
+    <article class="panel tracker-panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Replace</p>
+          <h2>Clean a real week into template</h2>
+        </div>
+        <span class="mini-chip">Backend seed</span>
+      </div>
+
+      <p class="database-form-copy">Upload the closest real week workbook. The backend removes live planning inputs, keeps the planner structure, and stores the cleaned result as the reusable template.</p>
+
+      <form class="form-stack" action="{{ url_for('loading_tracker_template_upload') }}" method="post" enctype="multipart/form-data">
+        <label class="file-field">
+          <span class="field-label">Week workbook</span>
+          <input name="template_workbook" type="file" accept=".xlsx,.xlsm" required>
+        </label>
+        <div class="chip-row">
+          <span class="info-chip">Keeps day layout</span>
+          <span class="info-chip">Clears live quantities</span>
+          <span class="info-chip">Stores clean backend copy</span>
+        </div>
+        <div class="actions">
+          <button class="primary-button" type="submit">Replace backend template</button>
+          {% if template_record %}
+            <a class="secondary-button" href="{{ url_for('loading_tracker_template_download') }}">Download clean template</a>
+          {% endif %}
+        </div>
+      </form>
+    </article>
+
+    <article class="panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Current template</p>
+          <h2>{{ template_record.name if template_record else 'No template yet' }}</h2>
+        </div>
+      </div>
+
+      {% if template_record %}
+        <div class="tracker-overview-stack">
+          <div class="tracker-overview-row">
+            <span class="metric-label">Source workbook</span>
+            <strong>{{ template_record.source_filename }}</strong>
+          </div>
+          <div class="tracker-overview-row">
+            <span class="metric-label">Sheet count</span>
+            <strong>{{ template_record.sheet_count }}</strong>
+          </div>
+          <div class="tracker-overview-row">
+            <span class="metric-label">Planning days</span>
+            <strong>{{ template_record.day_sheet_names_json|join(', ') }}</strong>
+          </div>
+          <div class="tracker-overview-row">
+            <span class="metric-label">Assumption SKUs</span>
+            <strong>{{ template_record.assumptions_sku_count }}</strong>
+          </div>
+          <div class="tracker-overview-row">
+            <span class="metric-label">Assumption stores</span>
+            <strong>{{ template_record.assumptions_store_count }}</strong>
+          </div>
+          <div class="tracker-overview-row">
+            <span class="metric-label">Updated</span>
+            <strong>{{ template_record.updated_at.strftime('%Y-%m-%d %H:%M') }}</strong>
+          </div>
+        </div>
+      {% else %}
+        <p class="empty-state">No loading tracker template has been saved yet.</p>
+      {% endif %}
+    </article>
+  </section>
+
+  {% if template_record %}
+    <section class="panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Backend details</p>
+          <h2>Template page planners can update</h2>
+        </div>
+        <span class="mini-chip">Without changing live week</span>
+      </div>
+
+      <form class="form-stack" action="{{ url_for('loading_tracker_template_update') }}" method="post">
+        <label class="field">
+          <span class="field-label">Template name</span>
+          <input name="name" type="text" value="{{ template_record.name }}" required>
+        </label>
+        <div class="actions">
+          <button class="primary-button" type="submit">Save template details</button>
+          <a class="secondary-button" href="{{ url_for('loading_tracker_template_download') }}">Download current clean template</a>
+        </div>
+      </form>
+    </section>
+  {% endif %}
+{% endblock %}

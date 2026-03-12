@@ -4,7 +4,7 @@ from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from app import _database_uri, create_app
 from models import (
@@ -17,6 +17,8 @@ from models import (
     LoadingTrackerTemplate,
     Product,
     ProductAlias,
+    SalesOrderRun,
+    SkuAutomatorRun,
     UploadRun,
     db,
 )
@@ -242,6 +244,90 @@ def build_loading_tracker_workbook_with_duplicate_sections() -> BytesIO:
     tues.cell(40, 10, 999999)
     tues.cell(40, 11, 888888)
     tues.cell(40, 7, None)
+
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    return stream
+
+
+def build_pepup_orders_workbook() -> BytesIO:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Order Item List"
+    sheet.append(
+        [
+            "Date of Order",
+            "Time of Order",
+            "Order Number",
+            "Retailer Name",
+            "Item Name",
+            "UOM",
+            "Quantity",
+            "Price",
+            "Total",
+        ]
+    )
+    sheet.append(
+        [
+            "2026-03-11 00:00:00",
+            "11:44:00",
+            "17552475",
+            "Globus Supermarket OKOTA",
+            "SKU Alpha",
+            "cases",
+            2,
+            107.5,
+            215,
+        ]
+    )
+    sheet.append(
+        [
+            "2026-03-11 00:00:00",
+            "11:45:00",
+            "17552476",
+            "Value Exchange Supermarket KESHI",
+            "SKU Vanilla",
+            "pcs",
+            6,
+            10,
+            60,
+        ]
+    )
+
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    return stream
+
+
+def build_tally_export_workbook() -> BytesIO:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sales Order- Dala Register"
+    sheet.append(["Sales Order- Dala Register"])
+    sheet.append(["For 11-Mar-26"])
+    sheet.append(
+        [
+            "Date",
+            "Particulars",
+            "Voucher No.",
+            "Order Reference No.",
+            "Terms of Payment",
+            "Other References",
+            "Terms of Delivery",
+            "Value",
+            "Gross Total",
+            "Inventory Pool",
+            "Vat on Sales- Registration No:- 31514501-0001",
+        ]
+    )
+    sheet.append(["2026-03-11 00:00:00", "Store One", "2026/1928", "17551810", "", "", "", 200, 215, 200, 15])
+    sheet.append(["", "SKU Alpha", "", "", "", "", "", 200, "", "", ""])
+    sheet.append(["2026-03-11 00:00:00", "Store One", "2026/1929", "17551811", "", "", "", 60, 64.5, 60, 4.5])
+    sheet.append(["", "SKU Vanilla", "", "", "", "", "", 60, "", "", ""])
+    sheet.append(["2026-03-11 00:00:00", "Store Two", "2026/1930", "17551812", "", "", "", 100, 107.5, 100, 7.5])
+    sheet.append(["", "SKU Alpha", "", "", "", "", "", 100, "", "", ""])
 
     stream = BytesIO()
     workbook.save(stream)
@@ -1167,5 +1253,169 @@ def test_loading_tracker_counts_handoff_history_and_carry_forward() -> None:
             assert float(latest_import.opening_g2g_total) == 7.0
             assert db.session.query(LoadingTrackerEvent).filter_by(tracker_import_id=latest_import.id).count() >= 1
             assert db.session.query(UploadRun).count() == 1
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_sales_order_run_generates_tally_ready_workbook() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        uom = Workbook()
+        sheet = uom.active
+        sheet.title = "UOM"
+        sheet.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
+        sheet.append(["SKU Alpha", "ctn", "pcs", 12, "Yes", 100])
+        sheet.append(["SKU Vanilla", "ctn", "pcs", 12, "No", 120])
+        uom_bytes = BytesIO()
+        uom.save(uom_bytes)
+        uom_bytes.seek(0)
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(uom_bytes.getvalue()), "uom.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        upload = client.post(
+            "/sales-order/import",
+            data={"sales_order_workbook": (BytesIO(build_pepup_orders_workbook().getvalue()), "pepup.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert upload.status_code == 302
+        assert "/sales-order/runs/" in upload.headers["Location"]
+        assert "/review" not in upload.headers["Location"]
+
+        run_id = upload.headers["Location"].split("/sales-order/runs/")[1]
+        page = client.get(upload.headers["Location"])
+        html = page.get_data(as_text=True)
+        assert page.status_code == 200
+        assert "Download Sales Order" in html
+
+        download = client.get(f"/sales-order/runs/{run_id}/download")
+        assert download.status_code == 200
+        assert download.mimetype == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+        workbook = load_workbook(BytesIO(download.data), data_only=True)
+        output = workbook["Sales Order"]
+        row2 = [output.cell(2, c).value for c in range(1, 13)]
+        row3 = [output.cell(3, c).value for c in range(1, 13)]
+
+        assert row2[1] == "17552475"
+        assert row2[4] == "SKU Alpha"
+        assert row2[5] == "2ctn"
+        assert row2[6] == 100
+        assert row2[7] == 200
+        assert row2[9] == "VAT"
+
+        assert row3[1] == "17552476"
+        assert row3[4] == "SKU Vanilla"
+        assert row3[5] == "0.5ctn"
+        assert row3[6] == 120
+        assert row3[7] == 60
+        assert row3[9] is None
+
+        with app.app_context():
+            run = db.session.get(SalesOrderRun, run_id)
+            assert run is not None
+            assert run.rows_ready == 2
+            assert run.rows_needing_review == 0
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_sku_automator_run_generates_register_and_matrix() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        uom = Workbook()
+        sheet = uom.active
+        sheet.title = "UOM"
+        sheet.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
+        sheet.append(["SKU Alpha", "ctn", "pcs", 12, "Yes", 100])
+        sheet.append(["SKU Vanilla", "ctn", "pcs", 12, "No", 120])
+        uom_bytes = BytesIO()
+        uom.save(uom_bytes)
+        uom_bytes.seek(0)
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(uom_bytes.getvalue()), "uom.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        upload = client.post(
+            "/sku-automator/import",
+            data={"sku_automator_workbook": (BytesIO(build_tally_export_workbook().getvalue()), "salesordertest.xls")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert upload.status_code == 302
+        assert "/sku-automator/runs/" in upload.headers["Location"]
+        assert "/review" not in upload.headers["Location"]
+
+        run_id = upload.headers["Location"].split("/sku-automator/runs/")[1]
+        page = client.get(upload.headers["Location"])
+        html = page.get_data(as_text=True)
+        assert page.status_code == 200
+        assert "Download planner output" in html
+
+        download = client.get(f"/sku-automator/runs/{run_id}/download")
+        assert download.status_code == 200
+        assert download.mimetype == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+        workbook = load_workbook(BytesIO(download.data), data_only=True)
+        register = workbook["Sales Order- Dala Register"]
+        matrix = workbook["Store SKU Matrix"]
+
+        register_row2 = [register.cell(2, c).value for c in range(1, 9)]
+        register_row3 = [register.cell(3, c).value for c in range(1, 9)]
+        register_row4 = [register.cell(4, c).value for c in range(1, 9)]
+
+        assert register_row2[1] == "Store One"
+        assert register_row2[2] == "SKU Alpha"
+        assert register_row2[3] == 2
+        assert register_row2[5] == 200
+        assert register_row2[6] == "17551810"
+
+        assert register_row3[2] == "SKU Vanilla"
+        assert register_row3[3] == 0.5
+        assert register_row3[5] == 60
+
+        assert register_row4[1] == "Store Two"
+        assert register_row4[2] == "SKU Alpha"
+        assert register_row4[3] == 1
+        assert register_row4[5] == 100
+
+        matrix_headers = [matrix.cell(1, c).value for c in range(1, 4)]
+        matrix_row2 = [matrix.cell(2, c).value for c in range(1, 4)]
+        matrix_row3 = [matrix.cell(3, c).value for c in range(1, 4)]
+
+        assert matrix_headers == ["Stores", "SKU Alpha", "SKU Vanilla"]
+        assert matrix_row2 == ["Store One", 2, 0.5]
+        assert matrix_row3 == ["Store Two", 1, 0]
+
+        with app.app_context():
+            run = db.session.get(SkuAutomatorRun, run_id)
+            assert run is not None
+            assert run.rows_ready == 3
+            assert run.store_count == 2
             db.session.remove()
             db.engine.dispose()

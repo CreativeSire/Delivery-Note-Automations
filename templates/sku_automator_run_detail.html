@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block title %}SKU Automator Run {{ summary.run.id }} | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="page-header">
+    <div>
+      <p class="eyebrow">SKU Automator Run</p>
+      <h1>{{ summary.run.original_filename }}</h1>
+    </div>
+    <div class="header-stats">
+      <div><span>Status</span><strong>{{ summary.run.status.replace('_', ' ') }}</strong></div>
+      <div><span>Lines</span><strong>{{ summary.run.line_count }}</strong></div>
+      <div><span>Stores</span><strong>{{ summary.run.store_count }}</strong></div>
+      <div><span>Refs</span><strong>{{ summary.run.order_reference_count }}</strong></div>
+      <div><span>Vouchers</span><strong>{{ summary.run.voucher_count }}</strong></div>
+      <div><span>Review</span><strong>{{ summary.run.rows_needing_review }}</strong></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="actions">
+      {% if summary.run.rows_needing_review > 0 %}
+        <a class="primary-button" href="{{ url_for('review_sku_automator_run', run_id=summary.run.id) }}">Review unresolved SKUs</a>
+      {% else %}
+        <a class="primary-button" href="{{ url_for('download_sku_automator_run', run_id=summary.run.id) }}">Download planner output</a>
+      {% endif %}
+      <a class="secondary-button" href="{{ url_for('sku_automator_home') }}">Back to SKU Automator</a>
+    </div>
+  </section>
+
+  <section class="content-grid">
+    <article class="panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Raw register</p>
+          <h2>Resolved voucher lines</h2>
+        </div>
+      </div>
+      {% if summary.preview_lines %}
+        <div class="data-table line-table">
+          <div class="table-line table-head-line">
+            <span>Store</span>
+            <span>SKU</span>
+            <span>Qty</span>
+            <span>Ref</span>
+          </div>
+          {% for line in summary.preview_lines %}
+            <div class="table-line">
+              <span>{{ line.store_name }}</span>
+              <span>{{ line.resolved_sku_name }}</span>
+              <span>{{ line.resolved_quantity }}</span>
+              <span>{{ line.order_reference_no }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No resolved voucher lines yet.</p>
+      {% endif %}
+    </article>
+
+    <article class="panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Matrix preview</p>
+          <h2>Store by SKU</h2>
+        </div>
+      </div>
+      {% if summary.matrix_rows and summary.matrix_headers %}
+        <div class="data-table line-table">
+          <div class="table-line table-head-line">
+            <span>Store</span>
+            {% for sku in summary.matrix_headers[:4] %}
+              <span>{{ sku }}</span>
+            {% endfor %}
+          </div>
+          {% for row in summary.matrix_rows %}
+            <div class="table-line">
+              <span>{{ row.store_name }}</span>
+              {% for sku in summary.matrix_headers[:4] %}
+                <span>{{ row.values_by_sku.get(sku, 0) }}</span>
+              {% endfor %}
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No matrix rows are ready yet.</p>
+      {% endif %}
+    </article>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head compact">
+      <div>
+        <p class="eyebrow">Review queue</p>
+        <h2>Unresolved SKUs</h2>
+      </div>
+    </div>
+    {% if summary.unresolved_groups %}
+      <div class="data-table line-table">
+        <div class="table-line table-head-line">
+          <span>Source SKU</span>
+          <span>Count</span>
+          <span>Refs / vouchers</span>
+        </div>
+        {% for group in summary.unresolved_groups %}
+          <div class="table-line">
+            <span>{{ group.source_sku }}</span>
+            <span>{{ group.occurrences }}</span>
+            <span>{{ group.order_numbers|join(', ') }}</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">Everything in this run is already matched and ready for planner output.</p>
+    {% endif %}
+  </section>
+{% endblock %}

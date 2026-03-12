@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}SKU Automator | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="page-header compact-header">
+    <div>
+      <p class="eyebrow">SKU Automator</p>
+      <h1>Tally export into planner-ready SKU matrix</h1>
+      <p class="page-copy">Upload the Tally sales-order register, preserve voucher and order-reference history, and reshape it into the store-by-SKU output used for planning.</p>
+    </div>
+    <div class="header-chip">{{ summary.run_count }} run{% if summary.run_count != 1 %}s{% endif %}</div>
+  </section>
+
+  <section class="content-grid content-grid-wide">
+    <article class="panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Import</p>
+          <h2>Tally sales-order export</h2>
+        </div>
+        <span class="mini-chip">Module 2</span>
+      </div>
+      <form class="form-stack" action="{{ url_for('upload_sku_automator') }}" method="post" enctype="multipart/form-data">
+        <label class="file-field">
+          <span class="field-label">Workbook</span>
+          <input name="sku_automator_workbook" type="file" accept=".xlsx,.xls" required>
+        </label>
+        <div class="chip-row">
+          <span class="info-chip">Voucher blocks</span>
+          <span class="info-chip">Order reference history</span>
+          <span class="info-chip">Merged store matrix</span>
+        </div>
+        <button class="primary-button" type="submit">Create SKU Automator run</button>
+      </form>
+    </article>
+
+    <article class="panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Latest run</p>
+          <h2>{{ summary.latest_run.original_filename if summary.latest_run else 'No SKU Automator run yet' }}</h2>
+        </div>
+      </div>
+      {% if summary.latest_run %}
+        <div class="tracker-overview-stack">
+          <div class="tracker-overview-row"><span class="metric-label">Lines found</span><strong>{{ summary.latest_run.line_count }}</strong></div>
+          <div class="tracker-overview-row"><span class="metric-label">Stores</span><strong>{{ summary.latest_run.store_count }}</strong></div>
+          <div class="tracker-overview-row"><span class="metric-label">Refs</span><strong>{{ summary.latest_run.order_reference_count }}</strong></div>
+          <div class="tracker-overview-row"><span class="metric-label">Review</span><strong>{{ summary.latest_run.rows_needing_review }}</strong></div>
+        </div>
+        <div class="actions">
+          <a class="primary-button" href="{{ url_for('view_sku_automator_run', run_id=summary.latest_run.id) }}">Open latest run</a>
+        </div>
+      {% else %}
+        <p class="empty-state">Start by uploading the Tally sales-order export.</p>
+      {% endif %}
+    </article>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head compact">
+      <div>
+        <p class="eyebrow">History</p>
+        <h2>Recent SKU Automator runs</h2>
+      </div>
+    </div>
+    {% if summary.recent_runs %}
+      <div class="data-table line-table">
+        <div class="table-line table-head-line">
+          <span>File</span>
+          <span>Status</span>
+          <span>Stores</span>
+          <span>Created</span>
+        </div>
+        {% for run in summary.recent_runs %}
+          <a class="table-line" href="{{ url_for('view_sku_automator_run', run_id=run.id) }}">
+            <span>{{ run.original_filename }}</span>
+            <span>{{ run.status.replace('_', ' ') }}</span>
+            <span>{{ run.store_count }}</span>
+            <span>{{ run.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+          </a>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">No SKU Automator history yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}

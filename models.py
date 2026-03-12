@@ -79,6 +79,85 @@ class UploadLine(db.Model):
     product = db.relationship("Product")
 
 
+class SalesOrderRun(db.Model):
+    id = db.Column(db.String(32), primary_key=True)
+    original_filename = db.Column(db.String(255), nullable=False)
+    source_sheet_name = db.Column(db.String(255), nullable=True)
+    status = db.Column(db.String(32), nullable=False, default="needs_review")
+    row_count = db.Column(db.Integer, nullable=False, default=0)
+    rows_ready = db.Column(db.Integer, nullable=False, default=0)
+    rows_needing_review = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    exported_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    lines = db.relationship("SalesOrderLine", back_populates="run", cascade="all, delete-orphan")
+
+
+class SalesOrderLine(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    run_id = db.Column(db.String(32), db.ForeignKey("sales_order_run.id"), nullable=False, index=True)
+    invoice_date = db.Column(db.String(32), nullable=False)
+    order_number = db.Column(db.String(128), nullable=False)
+    retailer_name = db.Column(db.String(255), nullable=False)
+    source_sku = db.Column(db.String(255), nullable=False, index=True)
+    normalized_source_sku = db.Column(db.String(255), nullable=False, index=True)
+    source_uom = db.Column(db.String(64), nullable=True)
+    source_quantity = db.Column(db.Numeric(14, 4), nullable=False)
+    source_rate = db.Column(db.Numeric(14, 4), nullable=False)
+    source_amount = db.Column(db.Numeric(14, 4), nullable=False)
+    status = db.Column(db.String(32), nullable=False, default="needs_review")
+    matched_by = db.Column(db.String(64), nullable=True)
+    product_id = db.Column(db.Integer, db.ForeignKey("product.id"), nullable=True)
+    resolved_sku_name = db.Column(db.String(255), nullable=True)
+    resolved_uom = db.Column(db.String(64), nullable=True)
+    resolved_quantity = db.Column(db.Numeric(14, 4), nullable=True)
+    resolved_quantity_text = db.Column(db.String(64), nullable=True)
+    resolved_rate = db.Column(db.Numeric(14, 4), nullable=True)
+    resolved_amount = db.Column(db.Numeric(14, 4), nullable=True)
+    resolved_vatable = db.Column(db.Boolean, nullable=False, default=False)
+
+    run = db.relationship("SalesOrderRun", back_populates="lines")
+    product = db.relationship("Product")
+
+
+class SkuAutomatorRun(db.Model):
+    id = db.Column(db.String(32), primary_key=True)
+    original_filename = db.Column(db.String(255), nullable=False)
+    source_sheet_name = db.Column(db.String(255), nullable=True)
+    status = db.Column(db.String(32), nullable=False, default="needs_review")
+    voucher_count = db.Column(db.Integer, nullable=False, default=0)
+    order_reference_count = db.Column(db.Integer, nullable=False, default=0)
+    line_count = db.Column(db.Integer, nullable=False, default=0)
+    rows_ready = db.Column(db.Integer, nullable=False, default=0)
+    rows_needing_review = db.Column(db.Integer, nullable=False, default=0)
+    store_count = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    exported_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    lines = db.relationship("SkuAutomatorLine", back_populates="run", cascade="all, delete-orphan")
+
+
+class SkuAutomatorLine(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    run_id = db.Column(db.String(32), db.ForeignKey("sku_automator_run.id"), nullable=False, index=True)
+    order_date = db.Column(db.String(32), nullable=False)
+    store_name = db.Column(db.String(255), nullable=False)
+    voucher_no = db.Column(db.String(128), nullable=True)
+    order_reference_no = db.Column(db.String(128), nullable=True)
+    source_sku = db.Column(db.String(255), nullable=False, index=True)
+    normalized_source_sku = db.Column(db.String(255), nullable=False, index=True)
+    source_value = db.Column(db.Numeric(14, 4), nullable=False)
+    status = db.Column(db.String(32), nullable=False, default="needs_review")
+    matched_by = db.Column(db.String(64), nullable=True)
+    product_id = db.Column(db.Integer, db.ForeignKey("product.id"), nullable=True)
+    resolved_sku_name = db.Column(db.String(255), nullable=True)
+    resolved_quantity = db.Column(db.Numeric(14, 4), nullable=True)
+    resolved_rate = db.Column(db.Numeric(14, 4), nullable=True)
+
+    run = db.relationship("SkuAutomatorRun", back_populates="lines")
+    product = db.relationship("Product")
+
+
 class LoadingTrackerImport(db.Model):
     id = db.Column(db.String(32), primary_key=True)
     filename = db.Column(db.String(255), nullable=False)

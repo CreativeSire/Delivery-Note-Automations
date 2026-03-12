@@ -1378,6 +1378,99 @@ h2 {
   gap: 12px;
 }
 
+.notification-stack,
+.planner-line-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.notification-card,
+.planner-line-card {
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(24, 50, 59, 0.04);
+}
+
+.notification-card strong,
+.planner-line-head strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.notification-card p {
+  margin: 0;
+  color: var(--text-soft);
+  line-height: 1.5;
+}
+
+.planner-line-head,
+.planner-line-meta,
+.planner-line-body,
+.planner-inline-form,
+.planner-pending-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.planner-line-head {
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.planner-line-head small,
+.planner-line-meta {
+  color: var(--text-soft);
+}
+
+.planner-line-body {
+  justify-content: space-between;
+}
+
+.planner-inline-form,
+.planner-pending-form {
+  flex: 1 1 320px;
+}
+
+.planner-inline-input,
+.planner-pending-form input,
+.planner-pending-form select {
+  min-height: 42px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(24, 50, 59, 0.06);
+  font: inherit;
+  color: var(--text);
+}
+
+.planner-inline-input {
+  width: 110px;
+}
+
+.planner-table .table-line {
+  grid-template-columns: minmax(220px, 1.8fr) 110px 140px 110px;
+}
+
+.planner-count-line input {
+  width: 100%;
+}
+
+.planner-negative {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.planner-positive {
+  color: var(--success);
+  font-weight: 700;
+}
+
+.inventory-day-block + .inventory-day-block {
+  margin-top: 20px;
+}
+
 .tracker-overview-row {
   display: flex;
   justify-content: space-between;

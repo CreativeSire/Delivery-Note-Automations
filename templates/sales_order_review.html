@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}Review Sales Order Run {{ summary.run.id }} | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="page-header compact-header">
+    <div>
+      <p class="eyebrow">Sales Order Review</p>
+      <h1>Resolve Pep-up item names</h1>
+    </div>
+    <div class="header-chip">{{ summary.run.rows_needing_review }} pending</div>
+  </section>
+
+  <section class="review-summary-grid">
+    <article class="panel review-summary-card">
+      <span class="panel-label">Run file</span>
+      <strong>{{ summary.run.original_filename }}</strong>
+      <span class="review-subtle">{{ summary.run.source_sheet_name }}</span>
+    </article>
+    <article class="panel review-summary-card">
+      <span class="panel-label">Pending groups</span>
+      <strong>{{ summary.unresolved_groups|length }}</strong>
+      <span class="review-subtle">Pep-up names to map</span>
+    </article>
+    <article class="panel review-summary-card">
+      <span class="panel-label">Affected rows</span>
+      <strong>{{ summary.run.rows_needing_review }}</strong>
+      <span class="review-subtle">lines waiting for approval</span>
+    </article>
+  </section>
+
+  <form class="review-form" action="{{ url_for('submit_sales_order_review', run_id=summary.run.id) }}" method="post">
+    <div class="review-card-stack">
+      {% for group in summary.unresolved_groups %}
+        {% set suggested_ids = group.suggestions | map(attribute='id') | list %}
+        <section class="panel review-card">
+          <div class="review-card-head">
+            <div class="review-source-block">
+              <p class="eyebrow">Incoming SKU</p>
+              <h2>{{ group.source_sku }}</h2>
+            </div>
+            <div class="review-count-badge">{{ group.occurrences }} line{% if group.occurrences != 1 %}s{% endif %}</div>
+          </div>
+
+          <div class="review-meta-grid">
+            <div class="review-meta-box">
+              <span class="metric-label">Orders</span>
+              <strong>{{ group.order_numbers|length }}</strong>
+              <small>{{ group.order_numbers|join(', ') }}</small>
+            </div>
+            <div class="review-meta-box">
+              <span class="metric-label">Stores</span>
+              <strong>{{ group.stores|length }}</strong>
+              <small>{{ group.stores|join(', ') }}</small>
+            </div>
+          </div>
+
+          {% if group.suggestions %}
+            <div class="review-hints">
+              <span class="field-label">Closest matches</span>
+              <div class="suggestion-chip-row">
+                {% for product in group.suggestions %}
+                  <span class="suggestion-chip">{{ product.sku_name }}</span>
+                {% endfor %}
+              </div>
+            </div>
+          {% endif %}
+
+          <label class="field review-select-field">
+            <span class="field-label">Map to product</span>
+            <select name="resolution::{{ group.source_sku }}" required>
+              <option value="">Choose product</option>
+              {% if group.suggestions %}
+                <optgroup label="Suggested matches">
+                  {% for product in group.suggestions %}
+                    <option value="{{ product.id }}">{{ product.sku_name }}</option>
+                  {% endfor %}
+                </optgroup>
+              {% endif %}
+              <optgroup label="All active products">
+                {% for product in all_products if product.id not in suggested_ids %}
+                  <option value="{{ product.id }}">{{ product.sku_name }}</option>
+                {% endfor %}
+              </optgroup>
+            </select>
+          </label>
+        </section>
+      {% endfor %}
+    </div>
+
+    <section class="panel review-actions-panel">
+      <div class="review-actions-copy">
+        <span class="panel-label">Approval</span>
+        <strong>Save these product links</strong>
+        <span class="review-subtle">Approved names will be remembered for future Sales Order runs.</span>
+      </div>
+      <div class="actions">
+        <button class="primary-button" type="submit">Save corrections</button>
+        <a class="secondary-button" href="{{ url_for('view_sales_order_run', run_id=summary.run.id) }}">Back to run</a>
+      </div>
+    </section>
+  </form>
+{% endblock %}

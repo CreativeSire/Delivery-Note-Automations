@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}Sales Order Run {{ summary.run.id }} | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="page-header">
+    <div>
+      <p class="eyebrow">Sales Order Run</p>
+      <h1>{{ summary.run.original_filename }}</h1>
+    </div>
+    <div class="header-stats">
+      <div><span>Status</span><strong>{{ summary.run.status.replace('_', ' ') }}</strong></div>
+      <div><span>Rows</span><strong>{{ summary.run.row_count }}</strong></div>
+      <div><span>Ready</span><strong>{{ summary.ready_lines }}</strong></div>
+      <div><span>Review</span><strong>{{ summary.run.rows_needing_review }}</strong></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="actions">
+      {% if summary.run.rows_needing_review > 0 %}
+        <a class="primary-button" href="{{ url_for('review_sales_order_run', run_id=summary.run.id) }}">Review unresolved SKUs</a>
+      {% else %}
+        <a class="primary-button" href="{{ url_for('download_sales_order_run', run_id=summary.run.id) }}">Download Sales Order</a>
+      {% endif %}
+      <a class="secondary-button" href="{{ url_for('sales_order_home') }}">Back to Sales Order</a>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head compact">
+      <div>
+        <p class="eyebrow">Preview</p>
+        <h2>Ready Tally rows</h2>
+      </div>
+    </div>
+    {% if summary.preview_lines %}
+      <div class="data-table line-table">
+        <div class="table-line table-head-line">
+          <span>Order</span>
+          <span>Store</span>
+          <span>SKU</span>
+          <span>Qty</span>
+          <span>Rate</span>
+          <span>Amount</span>
+        </div>
+        {% for line in summary.preview_lines %}
+          <div class="table-line">
+            <span>{{ line.order_number }}</span>
+            <span>{{ line.retailer_name }}</span>
+            <span>{{ line.resolved_sku_name }}</span>
+            <span>{{ line.resolved_quantity_text }}</span>
+            <span>{{ '{:,.2f}'.format(line.resolved_rate or 0) }}</span>
+            <span>{{ '{:,.2f}'.format(line.resolved_amount or 0) }}</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">No ready lines yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-head compact">
+      <div>
+        <p class="eyebrow">Review queue</p>
+        <h2>Unresolved SKUs</h2>
+      </div>
+    </div>
+    {% if summary.unresolved_groups %}
+      <div class="data-table line-table">
+        <div class="table-line table-head-line">
+          <span>Source SKU</span>
+          <span>Count</span>
+          <span>Orders / refs</span>
+        </div>
+        {% for group in summary.unresolved_groups %}
+          <div class="table-line">
+            <span>{{ group.source_sku }}</span>
+            <span>{{ group.occurrences }}</span>
+            <span>{{ group.order_numbers|join(', ') }}</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">Everything in this run is already matched and ready for export.</p>
+    {% endif %}
+  </section>
+{% endblock %}

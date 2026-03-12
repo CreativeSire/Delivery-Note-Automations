@@ -62,6 +62,19 @@ from services import (
     save_product_master_entry,
     set_product_active,
 )
+from workflow_services import (
+    WorkflowError,
+    apply_sales_order_review_decisions,
+    apply_sku_automator_review_decisions,
+    build_sales_order_run_summary,
+    build_sales_order_summary,
+    build_sku_automator_run_summary,
+    build_sku_automator_summary,
+    create_sales_order_run,
+    create_sku_automator_run,
+    export_sales_order_run_to_workbook,
+    export_sku_automator_run_to_workbook,
+)
 
 APP_TIMEZONE = os.environ.get("APP_TIMEZONE", "Africa/Lagos")
 
@@ -115,34 +128,176 @@ def create_app(test_config: dict | None = None) -> Flask:
             latest_tracker_import=latest_tracker_import,
         )
 
-    @app.get("/sku-automator")
-    def sku_automator_home() -> str:
-        return render_template(
-            "automation_future.html",
-            section_name="SKU Automator",
-            eyebrow="Future module",
-            headline="Feed cleaner SKU data straight into the product master and loading workflows.",
-            summary_points=[
-                "Receive new SKU lists before they reach planning.",
-                "Normalize naming before Delivery Note review is needed.",
-                "Push approved products into the live database automatically.",
-            ],
-            pipeline_steps=["SKU intake", "Validation", "Master update", "Planning sync"],
+    @app.get("/sales-order")
+    def sales_order_home() -> str:
+        summary = build_sales_order_summary()
+        return render_template("sales_order_home.html", summary=summary)
+
+    @app.post("/sales-order/import")
+    def upload_sales_order() -> str:
+        uploaded_file = request.files.get("sales_order_workbook")
+        if uploaded_file is None or uploaded_file.filename == "":
+            flash("Please upload the Pep-up order workbook first.", "error")
+            return redirect(url_for("sales_order_home"))
+
+        try:
+            run = create_sales_order_run(uploaded_file)
+        except WorkflowError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("sales_order_home"))
+
+        if run.row_count == 0:
+            flash("No usable order rows were found in the uploaded workbook.", "error")
+            return redirect(url_for("sales_order_home"))
+        if run.rows_needing_review > 0:
+            flash("Sales Order uploaded. Some SKUs need review before export.", "warning")
+            return redirect(url_for("review_sales_order_run", run_id=run.id))
+
+        flash("Sales Order run created and ready for Tally export.", "success")
+        return redirect(url_for("view_sales_order_run", run_id=run.id))
+
+    @app.get("/sales-order/runs/<run_id>")
+    def view_sales_order_run(run_id: str) -> str:
+        summary = build_sales_order_run_summary(run_id)
+        if summary is None:
+            abort(404)
+        return render_template("sales_order_run_detail.html", summary=summary)
+
+    @app.get("/sales-order/runs/<run_id>/review")
+    def review_sales_order_run(run_id: str) -> str:
+        summary = build_sales_order_run_summary(run_id)
+        if summary is None:
+            abort(404)
+        all_products = list(
+            db.session.query(Product).filter(Product.is_active.is_(True)).order_by(Product.sku_name.asc())
+        )
+        return render_template("sales_order_review.html", summary=summary, all_products=all_products)
+
+    @app.post("/sales-order/runs/<run_id>/review")
+    def submit_sales_order_review(run_id: str) -> str:
+        summary = build_sales_order_run_summary(run_id)
+        if summary is None:
+            abort(404)
+
+        mapping = {}
+        for group in summary.unresolved_groups:
+            raw_value = request.form.get(f"resolution::{group.source_sku}", "").strip()
+            if not raw_value:
+                flash(f"Please choose the correct product for '{group.source_sku}'.", "error")
+                all_products = list(
+                    db.session.query(Product).filter(Product.is_active.is_(True)).order_by(Product.sku_name.asc())
+                )
+                return render_template("sales_order_review.html", summary=summary, all_products=all_products)
+            mapping[group.source_sku] = int(raw_value)
+
+        try:
+            run = apply_sales_order_review_decisions(run_id, mapping)
+        except WorkflowError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("review_sales_order_run", run_id=run_id))
+
+        flash(f"Review saved. {run.rows_ready} rows are now ready for export.", "success")
+        return redirect(url_for("view_sales_order_run", run_id=run_id))
+
+    @app.get("/sales-order/runs/<run_id>/download")
+    def download_sales_order_run(run_id: str):
+        try:
+            filename, payload = export_sales_order_run_to_workbook(run_id)
+        except WorkflowError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("view_sales_order_run", run_id=run_id))
+
+        return send_file(
+            BytesIO(payload),
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-    @app.get("/sales-order-automator")
-    def sales_order_automator_home() -> str:
-        return render_template(
-            "automation_future.html",
-            section_name="Sales Order Automator",
-            eyebrow="Future module",
-            headline="Turn incoming sales orders into day-ready planning lines for the Loading Tracker.",
-            summary_points=[
-                "Read order demand before manual planning starts.",
-                "Suggest which supermarkets belong on which day.",
-                "Send approved demand into Pending or straight into day planning.",
-            ],
-            pipeline_steps=["Order import", "Route logic", "Day suggestion", "Planner sync"],
+    @app.get("/sku-automator")
+    def sku_automator_home() -> str:
+        summary = build_sku_automator_summary()
+        return render_template("sku_automator_home.html", summary=summary)
+
+    @app.post("/sku-automator/import")
+    def upload_sku_automator() -> str:
+        uploaded_file = request.files.get("sku_automator_workbook")
+        if uploaded_file is None or uploaded_file.filename == "":
+            flash("Please upload the Tally sales-order export first.", "error")
+            return redirect(url_for("sku_automator_home"))
+
+        try:
+            run = create_sku_automator_run(uploaded_file)
+        except WorkflowError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("sku_automator_home"))
+
+        if run.line_count == 0:
+            flash("No voucher lines were found in the uploaded Tally export.", "error")
+            return redirect(url_for("sku_automator_home"))
+        if run.rows_needing_review > 0:
+            flash("SKU Automator run created. Some SKUs need review before export.", "warning")
+            return redirect(url_for("review_sku_automator_run", run_id=run.id))
+
+        flash("SKU Automator run created and ready for planner output.", "success")
+        return redirect(url_for("view_sku_automator_run", run_id=run.id))
+
+    @app.get("/sku-automator/runs/<run_id>")
+    def view_sku_automator_run(run_id: str) -> str:
+        summary = build_sku_automator_run_summary(run_id)
+        if summary is None:
+            abort(404)
+        return render_template("sku_automator_run_detail.html", summary=summary)
+
+    @app.get("/sku-automator/runs/<run_id>/review")
+    def review_sku_automator_run(run_id: str) -> str:
+        summary = build_sku_automator_run_summary(run_id)
+        if summary is None:
+            abort(404)
+        all_products = list(
+            db.session.query(Product).filter(Product.is_active.is_(True)).order_by(Product.sku_name.asc())
+        )
+        return render_template("sku_automator_review.html", summary=summary, all_products=all_products)
+
+    @app.post("/sku-automator/runs/<run_id>/review")
+    def submit_sku_automator_review(run_id: str) -> str:
+        summary = build_sku_automator_run_summary(run_id)
+        if summary is None:
+            abort(404)
+
+        mapping = {}
+        for group in summary.unresolved_groups:
+            raw_value = request.form.get(f"resolution::{group.source_sku}", "").strip()
+            if not raw_value:
+                flash(f"Please choose the correct product for '{group.source_sku}'.", "error")
+                all_products = list(
+                    db.session.query(Product).filter(Product.is_active.is_(True)).order_by(Product.sku_name.asc())
+                )
+                return render_template("sku_automator_review.html", summary=summary, all_products=all_products)
+            mapping[group.source_sku] = int(raw_value)
+
+        try:
+            run = apply_sku_automator_review_decisions(run_id, mapping)
+        except WorkflowError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("review_sku_automator_run", run_id=run_id))
+
+        flash(f"Review saved. {run.rows_ready} rows are now ready for export.", "success")
+        return redirect(url_for("view_sku_automator_run", run_id=run_id))
+
+    @app.get("/sku-automator/runs/<run_id>/download")
+    def download_sku_automator_run(run_id: str):
+        try:
+            filename, payload = export_sku_automator_run_to_workbook(run_id)
+        except WorkflowError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("view_sku_automator_run", run_id=run_id))
+
+        return send_file(
+            BytesIO(payload),
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
     @app.get("/delivery-note")
