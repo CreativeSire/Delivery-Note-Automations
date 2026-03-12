@@ -160,8 +160,11 @@ def import_uom_rows(rows: list[list[Any]], filename: str, mode: str = "replace")
         product.sku_name: product for product in db.session.scalars(select(Product))
     }
     existing_by_normalized: dict[str, list[Product]] = {}
+    existing_by_sync_key: dict[str, list[Product]] = {}
     for product in existing_products.values():
         existing_by_normalized.setdefault(product.normalized_name, []).append(product)
+        if product.source_import_id is not None:
+            existing_by_sync_key.setdefault(normalize_uom_sync_key(product.sku_name), []).append(product)
         if mode == "replace" and product.source_import_id is not None:
             product.is_active = False
 
@@ -175,18 +178,17 @@ def import_uom_rows(rows: list[list[Any]], filename: str, mode: str = "replace")
 
         product = existing_products.get(sku_name)
         normalized_name = normalize_sku(sku_name)
+        sync_key = normalize_uom_sync_key(sku_name)
         is_active_row = True if len(row) < 7 else bool(row[6])
-        if product is None and mode == "merge":
+        if product is None:
             normalized_matches = existing_by_normalized.get(normalized_name, [])
             if len(normalized_matches) == 1:
-                matched_product = normalized_matches[0]
-                if is_active_row:
-                    skipped += 1
-                else:
-                    matched_product.is_active = False
-                    matched_product.source_import_id = import_log.id
-                    deactivated += 1
-                continue
+                product = normalized_matches[0]
+
+        if product is None and mode == "replace":
+            sync_matches = existing_by_sync_key.get(sync_key, [])
+            if len(sync_matches) == 1:
+                product = sync_matches[0]
 
         if product is None:
             product = Product(sku_name=sku_name, normalized_name=normalized_name)
@@ -201,6 +203,21 @@ def import_uom_rows(rows: list[list[Any]], filename: str, mode: str = "replace")
             product.source_import_id = import_log.id
             deactivated += 1
             continue
+
+        old_sku_name = product.sku_name
+        old_normalized_name = product.normalized_name
+        if old_sku_name != sku_name:
+            if existing_products.get(old_sku_name) is product:
+                del existing_products[old_sku_name]
+            existing_products[sku_name] = product
+            product.sku_name = sku_name
+
+        if old_normalized_name != normalized_name:
+            previous_matches = existing_by_normalized.get(old_normalized_name, [])
+            existing_by_normalized[old_normalized_name] = [item for item in previous_matches if item is not product]
+            if not existing_by_normalized[old_normalized_name]:
+                del existing_by_normalized[old_normalized_name]
+            existing_by_normalized.setdefault(normalized_name, []).append(product)
 
         product.normalized_name = normalized_name
         product.uom = _string_value(row[1]) or None
@@ -758,6 +775,18 @@ def normalize_sku(value: str) -> str:
     for character in value.upper():
         cleaned.append(character if character.isalnum() else " ")
     return " ".join("".join(cleaned).split())
+
+
+def normalize_uom_sync_key(value: str) -> str:
+    tokens = [token for token in normalize_sku(value).split() if token and token != "X000D"]
+    if len(tokens) > 1 and tokens[0].isalpha() and len(tokens[0]) <= 4:
+        tokens = tokens[1:]
+
+    core_tokens = [token for token in tokens if re.fullmatch(r"\d+X", token) is None]
+    if core_tokens:
+        tokens = core_tokens
+
+    return " ".join(sorted(tokens))
 
 
 def tomorrow_in_timezone(timezone_name: str) -> datetime:

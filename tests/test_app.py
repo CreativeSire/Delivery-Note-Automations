@@ -258,6 +258,19 @@ def build_stock_category_summary_uom_layout_workbook() -> BytesIO:
     return stream
 
 
+def build_uom_workbook_from_rows(rows: list[list[object]]) -> BytesIO:
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = "UOM"
+    ws.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
+    for row in rows:
+        ws.append(row)
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    return stream
+
+
 def build_loading_tracker_workbook_with_duplicate_sections() -> BytesIO:
     workbook = Workbook()
     workbook_stream = build_loading_tracker_workbook()
@@ -898,6 +911,104 @@ def test_uom_layout_on_stock_category_summary_sheet_imports_into_uom_master() ->
             assert float(palm.conversion) == 6.0
             assert palm.vatable is True
             assert float(palm.price) == 27759.69
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_uom_replace_sync_matches_minor_name_changes_without_false_removals() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+
+        original_rows = [
+            ["AF- 1.5Litre Palm Oil (6X)", "ctn", "btt", 6, "No", 5500],
+            ["WE Lemongrass Tea (56g)", "pck", "sachet", 12, "No", 2850],
+        ]
+        refreshed_rows = [
+            ["1.5Litre Palm Oil (6X)", "ctn", "btt", 6, "No", 27759.69],
+            ["WHE- 56g Lemongrass Tea (12x)_x000D_", "pck", "sachet", 12, "No", 2850],
+        ]
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(build_uom_workbook_from_rows(original_rows).getvalue()), "uom-old.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+
+        response = client.post(
+            "/uom/import",
+            data={
+                "return_to": "product_master",
+                "uom_workbook": (BytesIO(build_uom_workbook_from_rows(refreshed_rows).getvalue()), "uom-new.xlsx"),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+
+        with app.app_context():
+            all_products = list(db.session.query(Product).order_by(Product.sku_name.asc()))
+            assert len(all_products) == 2
+
+            palm = db.session.query(Product).filter_by(sku_name="1.5Litre Palm Oil (6X)").one()
+            tea = db.session.query(Product).filter_by(sku_name="WHE- 56g Lemongrass Tea (12x)_x000D_").one()
+            assert palm.is_active is True
+            assert tea.is_active is True
+            assert float(palm.price) == 27759.69
+            assert db.session.query(Product).filter_by(sku_name="AF- 1.5Litre Palm Oil (6X)").count() == 0
+            assert db.session.query(Product).filter_by(sku_name="WE Lemongrass Tea (56g)").count() == 0
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_uom_replace_sync_does_not_auto_merge_ambiguous_name_changes() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+
+        original_rows = [
+            ["AGS- 200g Jadens Fruitamil (12x)", "ctn", "sachet", 12, "No", 1000],
+            ["AGS- 400g Jadens Fruitamil (12x)", "ctn", "sachet", 12, "No", 1800],
+        ]
+        refreshed_rows = [
+            ["AGS- Jadens Fruitamil (12x)", "ctn", "sachet", 12, "No", 1500],
+        ]
+
+        client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(build_uom_workbook_from_rows(original_rows).getvalue()), "uom-old.xlsx")},
+            content_type="multipart/form-data",
+        )
+        client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(build_uom_workbook_from_rows(refreshed_rows).getvalue()), "uom-new.xlsx")},
+            content_type="multipart/form-data",
+        )
+
+        with app.app_context():
+            ambiguous = db.session.query(Product).filter_by(sku_name="AGS- Jadens Fruitamil (12x)").one()
+            old_200g = db.session.query(Product).filter_by(sku_name="AGS- 200g Jadens Fruitamil (12x)").one()
+            old_400g = db.session.query(Product).filter_by(sku_name="AGS- 400g Jadens Fruitamil (12x)").one()
+            assert ambiguous.is_active is True
+            assert old_200g.is_active is False
+            assert old_400g.is_active is False
+            assert db.session.query(Product).count() == 3
             db.session.remove()
             db.engine.dispose()
 
