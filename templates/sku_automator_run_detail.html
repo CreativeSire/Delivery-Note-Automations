@@ -29,6 +29,44 @@
     </div>
   </section>
 
+  <section class="panel">
+    <div class="panel-head compact">
+      <div>
+        <p class="eyebrow">Loading Tracker bridge</p>
+        <h2>Open this run as a live planning week</h2>
+      </div>
+    </div>
+    {% if summary.run.rows_needing_review > 0 %}
+      <p class="empty-state">Resolve the remaining SKU review items first, then this run can create a live Loading Tracker week directly.</p>
+    {% elif loading_tracker_template %}
+      <form class="form-stack" action="{{ url_for('create_loading_tracker_week_from_sku_run', run_id=summary.run.id) }}" method="post">
+        {% if latest_loading_tracker_import %}
+          <input type="hidden" name="source_import_id" value="{{ latest_loading_tracker_import.id }}">
+        {% endif %}
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Week label</span>
+            <input name="week_label" type="text" placeholder="Optional live week label">
+          </label>
+          <label class="field">
+            <span class="field-label">Drop planner rows into</span>
+            <select name="target_day_name">
+              {% for day_name in loading_tracker_day_options %}
+                <option value="{{ day_name }}">{{ day_name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+        <div class="actions">
+          <button class="primary-button" type="submit">Create Loading Tracker week</button>
+          <span class="field-hint">Uses the active LT template for days, G2G seeds, and fees, then drops this SKU matrix straight into the live planner.</span>
+        </div>
+      </form>
+    {% else %}
+      <p class="empty-state">Save an active Loading Tracker template first, then this run can open directly into a live planning week.</p>
+    {% endif %}
+  </section>
+
   <section class="content-grid">
     <article class="panel">
       <div class="panel-head compact">

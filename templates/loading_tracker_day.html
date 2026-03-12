@@ -52,6 +52,45 @@
     </article>
   </section>
 
+  {% if day_context.suggestions %}
+    <section class="glass-card planner-suggestion-shell">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Suggested planner actions</p>
+          <h2>Fast moves based on today’s live stock pressure</h2>
+        </div>
+      </div>
+      <div class="suggestion-grid">
+        {% for suggestion in day_context.suggestions %}
+          <section class="suggestion-card">
+            <div class="suggestion-card-head">
+              <div>
+                <span class="mini-chip">{{ suggestion.reason_label }}</span>
+                <h3>{{ suggestion.sku }}</h3>
+              </div>
+              <strong>Short by {{ suggestion.shortfall }}</strong>
+            </div>
+            <p class="field-hint">Move {{ suggestion.selected_count }} row(s) into Pending to relieve the shortage quickly.</p>
+            <div class="planner-sku-list">
+              {% for row in suggestion.rows %}
+                <span>{{ row.store_name }} <strong>{{ row.quantity }}</strong></span>
+              {% endfor %}
+            </div>
+            <form action="{{ url_for('loading_tracker_day_bulk_move', import_id=tracker_import.id, day_name=day.day_name) }}" method="post">
+              <input type="hidden" name="target_day_name" value="__pending__">
+              <input type="hidden" name="reason_code" value="{{ suggestion.reason_code }}">
+              <input type="hidden" name="reason_note" value="{{ suggestion.reason_note }}">
+              {% for row_id in suggestion.row_ids %}
+                <input type="hidden" name="row_ids" value="{{ row_id }}">
+              {% endfor %}
+              <button class="secondary-button" type="submit">Apply suggestion</button>
+            </form>
+          </section>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+
   <section class="content-split">
     <article class="glass-card">
       <div class="module-head compact">
@@ -61,6 +100,35 @@
         </div>
       </div>
       {% if day_context.rows %}
+        <form class="bulk-action-shell" id="bulk-day-action-form" action="{{ url_for('loading_tracker_day_bulk_move', import_id=tracker_import.id, day_name=day.day_name) }}" method="post">
+          <div class="bulk-action-grid">
+            <label class="field">
+              <span class="field-label">Move selected rows into</span>
+              <select name="target_day_name">
+                {% for option in day_context.bulk_target_options %}
+                  <option value="{{ option.value }}">{{ option.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">Pending reason</span>
+              <select name="reason_code">
+                <option value="">Choose when moving to Pending</option>
+                {% for option in day_context.bulk_reason_options %}
+                  <option value="{{ option.code }}">{{ option.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">Note</span>
+              <input name="reason_note" type="text" placeholder="Optional note for selected rows">
+            </label>
+          </div>
+          <div class="actions">
+            <button class="primary-button" type="submit">Move selected rows</button>
+            <span class="field-hint">Use this for fast day balancing. If the target is Pending, a reason is required.</span>
+          </div>
+        </form>
         <div class="planner-list">
           {% for row in day_context.rows %}
             <section class="planner-card">
@@ -75,6 +143,10 @@
                   <small>{{ row.product_count }} items</small>
                 </div>
               </div>
+              <label class="planner-row-toggle">
+                <input form="bulk-day-action-form" type="checkbox" name="row_ids" value="{{ row.id }}">
+                <span>Select for bulk action</span>
+              </label>
               <div class="planner-sku-list">
                 {% for item in row.top_items %}
                   <span>{{ item.sku }} <strong>{{ item.quantity }}</strong></span>

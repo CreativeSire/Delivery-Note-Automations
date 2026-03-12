@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from openpyxl import Workbook, load_workbook
 
 from app import _database_uri, create_app
+from loading_tracker_services import create_loading_tracker_import_job, run_loading_tracker_import_job
 from models import (
     LoadingTrackerDailyCount,
     LoadingTrackerDay,
@@ -1253,6 +1254,215 @@ def test_loading_tracker_counts_handoff_history_and_carry_forward() -> None:
             assert float(latest_import.opening_g2g_total) == 7.0
             assert db.session.query(LoadingTrackerEvent).filter_by(tracker_import_id=latest_import.id).count() >= 1
             assert db.session.query(UploadRun).count() == 1
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_loading_tracker_import_job_can_resume_from_saved_upload() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        with app.app_context():
+            job = create_loading_tracker_import_job("Week 4 Loading Tracker.xlsx")
+            job_id = job.id
+            upload_root = Path(app.instance_path) / "loading_tracker_jobs"
+            upload_root.mkdir(parents=True, exist_ok=True)
+            saved_path = upload_root / f"{job_id}-Week-4-Loading-Tracker.xlsx"
+            saved_path.write_bytes(build_loading_tracker_workbook().getvalue())
+
+            run_loading_tracker_import_job(job_id)
+
+            refreshed_job = db.session.get(LoadingTrackerImportJob, job_id)
+            assert refreshed_job is not None
+            assert refreshed_job.status == "completed"
+            assert refreshed_job.tracker_import_id
+            assert db.session.query(LoadingTrackerImport).count() == 1
+            assert saved_path.exists() is False
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_loading_tracker_day_suggestions_and_bulk_moves() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+                "LOADING_TRACKER_IMPORT_SYNC": True,
+            }
+        )
+
+        client = app.test_client()
+
+        response = client.post(
+            "/loading-tracker/import",
+            data={"loading_tracker_workbook": (BytesIO(build_loading_tracker_workbook().getvalue()), "Week 4 Loading Tracker.xlsx")},
+            content_type="multipart/form-data",
+            headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
+        )
+        assert response.status_code == 202
+
+        with app.app_context():
+            tracker_import = db.session.query(LoadingTrackerImport).one()
+            mon = db.session.query(LoadingTrackerDay).filter_by(tracker_import_id=tracker_import.id, day_name="Mon").one()
+            mon_row_ids = [
+                row.id
+                for row in db.session.query(LoadingTrackerRow)
+                .filter_by(day_id=mon.id, row_state="planned")
+                .order_by(LoadingTrackerRow.sort_order.asc())
+                .all()
+            ]
+            import_id = tracker_import.id
+
+        counts = client.post(
+            f"/loading-tracker/imports/{import_id}/days/Mon/counts",
+            data={"count::SKU Alpha": "1", "count::SKU Beta": "4"},
+            follow_redirects=True,
+        )
+        counts_html = counts.get_data(as_text=True)
+        assert counts.status_code == 200
+        assert "Suggested planner actions" in counts_html
+        assert "Apply suggestion" in counts_html
+
+        bulk_to_pending = client.post(
+            f"/loading-tracker/imports/{import_id}/days/Mon/bulk-move",
+            data={
+                "target_day_name": "__pending__",
+                "reason_code": "stock_shortage",
+                "reason_note": "bulk relief",
+                "row_ids": [str(mon_row_ids[0]), str(mon_row_ids[1])],
+            },
+            follow_redirects=True,
+        )
+        bulk_pending_html = bulk_to_pending.get_data(as_text=True)
+        assert bulk_to_pending.status_code == 200
+        assert "2 planner row(s) were moved into Pending." in bulk_pending_html
+
+        with app.app_context():
+            pending_rows = list(
+                db.session.query(LoadingTrackerRow)
+                .filter_by(tracker_import_id=import_id, row_state="pending")
+                .order_by(LoadingTrackerRow.id.asc())
+                .all()
+            )
+            moved_pending_ids = [row.id for row in pending_rows if row.store_name in {"Store One", "Second Store"}]
+            assert len(moved_pending_ids) == 2
+            assert len(pending_rows) == 3
+
+        bulk_to_tues = client.post(
+            f"/loading-tracker/imports/{import_id}/pending/bulk-move",
+            data={
+                "target_day_name": "Tues",
+                "row_ids": [str(row_id) for row_id in moved_pending_ids],
+            },
+            follow_redirects=True,
+        )
+        bulk_tues_html = bulk_to_tues.get_data(as_text=True)
+        assert bulk_to_tues.status_code == 200
+        assert "2 pending row(s) were moved into Tues." in bulk_tues_html
+        assert "Tues planning workspace." in bulk_tues_html
+
+        with app.app_context():
+            tues = db.session.query(LoadingTrackerDay).filter_by(tracker_import_id=import_id, day_name="Tues").one()
+            tues_planned = db.session.query(LoadingTrackerRow).filter_by(day_id=tues.id, row_state="planned").count()
+            pending_count = db.session.query(LoadingTrackerRow).filter_by(tracker_import_id=import_id, row_state="pending").count()
+            assert tues_planned == 4
+            assert pending_count == 1
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_sku_automator_run_can_start_loading_tracker_week_directly() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+                "LOADING_TRACKER_IMPORT_SYNC": True,
+            }
+        )
+
+        client = app.test_client()
+        uom = Workbook()
+        sheet = uom.active
+        sheet.title = "UOM"
+        sheet.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
+        sheet.append(["SKU Alpha", "ctn", "pcs", 12, "Yes", 100])
+        sheet.append(["SKU Vanilla", "ctn", "pcs", 12, "No", 120])
+        uom_bytes = BytesIO()
+        uom.save(uom_bytes)
+        uom_bytes.seek(0)
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(uom_bytes.getvalue()), "uom.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        tracker_upload = client.post(
+            "/loading-tracker/import",
+            data={"loading_tracker_workbook": (BytesIO(build_loading_tracker_workbook().getvalue()), "Week 4 Loading Tracker.xlsx")},
+            content_type="multipart/form-data",
+            headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
+        )
+        assert tracker_upload.status_code == 202
+
+        with app.app_context():
+            source_import = db.session.query(LoadingTrackerImport).one()
+            source_import_id = source_import.id
+
+        capture = client.post(
+            "/loading-tracker/template/capture",
+            data={"source_import_id": source_import_id, "template_name": "Main planning template"},
+            follow_redirects=True,
+        )
+        assert capture.status_code == 200
+
+        upload = client.post(
+            "/sku-automator/import",
+            data={"sku_automator_workbook": (BytesIO(build_tally_export_workbook().getvalue()), "salesordertest.xls")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert upload.status_code == 302
+        run_id = upload.headers["Location"].split("/sku-automator/runs/")[1]
+
+        create_week = client.post(
+            f"/sku-automator/runs/{run_id}/loading-tracker",
+            data={
+                "source_import_id": source_import_id,
+                "week_label": "Week 5 from SKU Automator",
+                "target_day_name": "Tues",
+            },
+            follow_redirects=True,
+        )
+        create_week_html = create_week.get_data(as_text=True)
+        assert create_week.status_code == 200
+        assert "SKU Automator matrix is now a live Loading Tracker week" in create_week_html
+
+        with app.app_context():
+            imports = db.session.query(LoadingTrackerImport).order_by(LoadingTrackerImport.created_at.asc()).all()
+            assert len(imports) == 2
+            live_week = imports[-1]
+            planned_rows = db.session.query(LoadingTrackerRow).filter_by(tracker_import_id=live_week.id, row_state="planned").all()
+            pending_count = db.session.query(LoadingTrackerRow).filter_by(tracker_import_id=live_week.id, row_state="pending").count()
+            tues = db.session.query(LoadingTrackerDay).filter_by(tracker_import_id=live_week.id, day_name="Tues").one()
+            tues_rows = db.session.query(LoadingTrackerRow).filter_by(day_id=tues.id, row_state="planned").all()
+
+            assert live_week.week_label == "Week 5 from SKU Automator"
+            assert len(planned_rows) == 2
+            assert {row.source_kind for row in planned_rows} == {"sku_automator"}
+            assert {row.store_name for row in tues_rows} == {"Store One", "Store Two"}
+            assert pending_count == 1
             db.session.remove()
             db.engine.dispose()
 

@@ -2599,6 +2599,70 @@ h3 {
   align-items: center;
 }
 
+.planner-suggestion-shell {
+  margin-bottom: 18px;
+}
+
+.suggestion-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.suggestion-card {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border-radius: 20px;
+  background: rgba(20, 52, 60, 0.04);
+  border: 1px solid rgba(20, 52, 60, 0.08);
+}
+
+.suggestion-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.suggestion-card h3 {
+  margin-top: 6px;
+}
+
+.bulk-action-shell {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(20, 52, 60, 0.04);
+  border: 1px solid rgba(20, 52, 60, 0.06);
+}
+
+.bulk-action-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.bulk-action-grid-compact {
+  grid-template-columns: minmax(0, 260px);
+}
+
+.planner-row-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.planner-row-toggle input {
+  width: 16px;
+  height: 16px;
+}
+
 @media (max-width: 1280px) {
   .premium-shell,
   .module-stage,
@@ -2618,6 +2682,8 @@ h3 {
   .future-grid,
   .pipeline-strip,
   .field-row,
+  .bulk-action-grid,
+  .bulk-action-grid-compact,
   .ll-total-grid,
   .module-meta-grid,
   .module-meters,

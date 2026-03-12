@@ -57,6 +57,22 @@
         </div>
       </div>
       {% if pending_context.rows %}
+        <form class="bulk-action-shell" id="bulk-pending-action-form" action="{{ url_for('loading_tracker_pending_bulk_move', import_id=tracker_import.id) }}" method="post">
+          <div class="bulk-action-grid bulk-action-grid-compact">
+            <label class="field">
+              <span class="field-label">Move selected rows into</span>
+              <select name="target_day_name">
+                {% for option in pending_context.day_options %}
+                  <option value="{{ option.value }}">{{ option.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+          <div class="actions">
+            <button class="primary-button" type="submit">Move selected pending rows</button>
+            <span class="field-hint">Use this when stock frees up and several waiting rows can return into the same day at once.</span>
+          </div>
+        </form>
         <div class="planner-list">
           {% for row in pending_context.rows %}
             <section class="planner-card pending-card">
@@ -71,6 +87,10 @@
                   <small>{{ row.product_count }} items</small>
                 </div>
               </div>
+              <label class="planner-row-toggle">
+                <input form="bulk-pending-action-form" type="checkbox" name="row_ids" value="{{ row.id }}">
+                <span>Select for bulk return</span>
+              </label>
               <div class="planner-sku-list">
                 {% for item in row.top_items %}
                   <span>{{ item.sku }} <strong>{{ item.quantity }}</strong></span>

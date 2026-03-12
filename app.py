@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import secrets
-import threading
+import subprocess
+import sys
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 
@@ -10,8 +12,10 @@ from flask import Flask, abort, flash, jsonify, redirect, render_template, reque
 from werkzeug.utils import secure_filename
 
 from loading_tracker_services import (
+    DAY_SHEET_NAMES,
     LoadingTrackerError,
     PENDING_SENTINEL,
+    bulk_move_loading_tracker_rows,
     build_loading_tracker_count_context,
     build_loading_tracker_overview,
     build_loading_tracker_day_context,
@@ -27,6 +31,7 @@ from loading_tracker_services import (
     capture_loading_tracker_template,
     create_loading_tracker_import_job,
     create_delivery_note_run_from_loading_day,
+    create_loading_tracker_week_from_sku_automator_run,
     create_loading_tracker_week_from_template,
     export_loading_tracker_history_csv,
     get_active_loading_tracker_import_job,
@@ -247,7 +252,43 @@ def create_app(test_config: dict | None = None) -> Flask:
         summary = build_sku_automator_run_summary(run_id)
         if summary is None:
             abort(404)
-        return render_template("sku_automator_run_detail.html", summary=summary)
+        loading_tracker_template = get_loading_tracker_template()
+        latest_loading_tracker_import = get_loading_tracker_import()
+        if loading_tracker_template is not None and loading_tracker_template.days:
+            loading_tracker_day_options = [day.day_name for day in loading_tracker_template.days]
+        elif latest_loading_tracker_import is not None and latest_loading_tracker_import.days:
+            loading_tracker_day_options = [day.day_name for day in latest_loading_tracker_import.days]
+        else:
+            loading_tracker_day_options = list(DAY_SHEET_NAMES)
+        return render_template(
+            "sku_automator_run_detail.html",
+            summary=summary,
+            loading_tracker_template=loading_tracker_template,
+            latest_loading_tracker_import=latest_loading_tracker_import,
+            loading_tracker_day_options=loading_tracker_day_options,
+        )
+
+    @app.post("/sku-automator/runs/<run_id>/loading-tracker")
+    def create_loading_tracker_week_from_sku_run(run_id: str) -> str:
+        target_day_name = request.form.get("target_day_name", "").strip() or None
+        week_label = request.form.get("week_label", "").strip() or None
+        source_import_id = request.form.get("source_import_id", "").strip() or None
+        try:
+            tracker_import = create_loading_tracker_week_from_sku_automator_run(
+                run_id,
+                target_day_name=target_day_name,
+                source_import_id=source_import_id,
+                week_label=week_label,
+            )
+        except LoadingTrackerError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("view_sku_automator_run", run_id=run_id))
+
+        flash(
+            "The SKU Automator matrix is now a live Loading Tracker week. Pending and remaining stock were carried forward where available.",
+            "success",
+        )
+        return redirect(url_for("loading_tracker_import_view", import_id=tracker_import.id))
 
     @app.get("/sku-automator/runs/<run_id>/review")
     def review_sku_automator_run(run_id: str) -> str:
@@ -546,6 +587,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         active_import_job = get_loading_tracker_import_job(request.args.get("job")) if request.args.get("job") else None
         if active_import_job is None:
             active_import_job = get_active_loading_tracker_import_job()
+        _ensure_loading_tracker_import_worker(app, active_import_job)
         return render_template(
             "loading_tracker_home.html",
             tracker_import=tracker_import,
@@ -590,6 +632,8 @@ def create_app(test_config: dict | None = None) -> Flask:
             abort(404)
         overview = build_loading_tracker_overview(tracker_import)
         template = get_loading_tracker_template()
+        active_import_job = get_active_loading_tracker_import_job()
+        _ensure_loading_tracker_import_worker(app, active_import_job)
         return render_template(
             "loading_tracker_home.html",
             tracker_import=tracker_import,
@@ -597,7 +641,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             day_cards=tracker_import.days,
             template=template,
             template_context=build_loading_tracker_template_context(template),
-            active_import_job=serialize_loading_tracker_import_job(get_active_loading_tracker_import_job()),
+            active_import_job=serialize_loading_tracker_import_job(active_import_job),
         )
 
     @app.post("/loading-tracker/template/capture")
@@ -650,12 +694,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         if app.config.get("TESTING") or app.config.get("LOADING_TRACKER_IMPORT_SYNC"):
             run_loading_tracker_import_job(job_id, saved_path, filename)
         else:
-            thread = threading.Thread(
-                target=_run_loading_tracker_import_job_in_background,
-                args=(app, job_id, saved_path, filename),
-                daemon=True,
-            )
-            thread.start()
+            _spawn_loading_tracker_import_worker(app, job_id)
 
         if _wants_json():
             return (
@@ -677,6 +716,10 @@ def create_app(test_config: dict | None = None) -> Flask:
         if job is None:
             abort(404)
 
+        _ensure_loading_tracker_import_worker(app, job)
+        job = get_loading_tracker_import_job(job_id)
+        if job is None:
+            abort(404)
         payload = serialize_loading_tracker_import_job(job) or {}
         if job.tracker_import_id:
             payload["redirect_url"] = url_for("loading_tracker_import_view", import_id=job.tracker_import_id)
@@ -820,6 +863,31 @@ def create_app(test_config: dict | None = None) -> Flask:
         flash(f"'{row.store_name}' is now waiting in Pending.", "warning")
         return redirect(url_for("loading_tracker_pending_view", import_id=import_id))
 
+    @app.post("/loading-tracker/imports/<import_id>/days/<day_name>/bulk-move")
+    def loading_tracker_day_bulk_move(import_id: str, day_name: str) -> str:
+        target_day_name = request.form.get("target_day_name", "").strip() or PENDING_SENTINEL
+        reason_code = request.form.get("reason_code", "").strip() or None
+        reason_note = request.form.get("reason_note", "").strip() or None
+        raw_row_ids = [value for value in request.form.getlist("row_ids") if value.strip()]
+        try:
+            rows = bulk_move_loading_tracker_rows(
+                import_id,
+                [int(value) for value in raw_row_ids],
+                target_day_name,
+                reason_code,
+                reason_note,
+            )
+        except (LoadingTrackerError, ValueError) as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("loading_tracker_day_view", import_id=import_id, day_name=day_name))
+
+        if target_day_name == PENDING_SENTINEL:
+            flash(f"{len(rows)} planner row(s) were moved into Pending.", "warning")
+            return redirect(url_for("loading_tracker_pending_view", import_id=import_id))
+
+        flash(f"{len(rows)} planner row(s) were moved into {target_day_name}.", "success")
+        return redirect(url_for("loading_tracker_day_view", import_id=import_id, day_name=target_day_name))
+
     @app.get("/loading-tracker/imports/<import_id>/pending")
     def loading_tracker_pending_view(import_id: str) -> str:
         tracker_import = get_loading_tracker_import(import_id)
@@ -830,6 +898,23 @@ def create_app(test_config: dict | None = None) -> Flask:
             tracker_import=tracker_import,
             pending_context=build_loading_tracker_pending_context(tracker_import),
         )
+
+    @app.post("/loading-tracker/imports/<import_id>/pending/bulk-move")
+    def loading_tracker_pending_bulk_move(import_id: str) -> str:
+        target_day_name = request.form.get("target_day_name", "").strip()
+        raw_row_ids = [value for value in request.form.getlist("row_ids") if value.strip()]
+        try:
+            rows = bulk_move_loading_tracker_rows(
+                import_id,
+                [int(value) for value in raw_row_ids],
+                target_day_name,
+            )
+        except (LoadingTrackerError, ValueError) as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("loading_tracker_pending_view", import_id=import_id))
+
+        flash(f"{len(rows)} pending row(s) were moved into {target_day_name}.", "success")
+        return redirect(url_for("loading_tracker_day_view", import_id=import_id, day_name=target_day_name))
 
     @app.get("/loading-tracker/imports/<import_id>/inventory")
     def loading_tracker_inventory_view(import_id: str) -> str:
@@ -896,15 +981,35 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     return app
 
+def _ensure_loading_tracker_import_worker(app: Flask, job) -> None:
+    if app.config.get("TESTING") or app.config.get("LOADING_TRACKER_IMPORT_SYNC"):
+        return
+    if not _loading_tracker_job_needs_worker(job):
+        return
+    _spawn_loading_tracker_import_worker(app, job.id)
 
-def _run_loading_tracker_import_job_in_background(
-    app: Flask,
-    job_id: str,
-    saved_path: Path,
-    filename: str,
-) -> None:
-    with app.app_context():
-        run_loading_tracker_import_job(job_id, saved_path, filename)
+
+def _loading_tracker_job_needs_worker(job) -> bool:
+    if job is None or job.tracker_import_id or job.status == "failed":
+        return False
+    if job.status == "queued":
+        return True
+    if job.status != "running" or job.updated_at is None:
+        return False
+    return job.updated_at < datetime.now(UTC) - timedelta(minutes=15)
+
+
+def _spawn_loading_tracker_import_worker(app: Flask, job_id: str) -> None:
+    worker_script = Path(__file__).resolve().with_name("loading_tracker_worker.py")
+    if not worker_script.exists():
+        return
+    subprocess.Popen(
+        [sys.executable, str(worker_script), job_id],
+        cwd=str(Path(__file__).resolve().parent),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=os.environ.copy(),
+    )
 
 
 def _save_loading_tracker_upload(instance_path: str, job_id: str, uploaded_file) -> Path:
