@@ -1051,6 +1051,31 @@ h2 {
   grid-template-columns: minmax(0, 1.8fr) minmax(0, 1.8fr) 140px;
 }
 
+.table-line-rule {
+  grid-template-columns: minmax(0, 1.8fr) minmax(0, 1.6fr) 90px;
+}
+
+.table-line-sales-order-preview {
+  grid-template-columns: minmax(0, 1.3fr) 90px minmax(0, 1.8fr) minmax(0, 1.6fr) 100px 100px 110px;
+}
+
+.table-line-sku-register-preview {
+  grid-template-columns: minmax(0, 1.8fr) minmax(0, 1.6fr) 90px 90px minmax(0, 1.3fr);
+}
+
+.database-rules-table {
+  margin-top: 16px;
+}
+
+.database-rules-table strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.database-rules-table small {
+  color: var(--text-soft);
+}
+
 .table-line-run {
   grid-template-columns: minmax(0, 2.4fr) 70px minmax(0, 1.5fr);
 }

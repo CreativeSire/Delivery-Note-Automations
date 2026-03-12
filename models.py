@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import inspect, text
 
 db = SQLAlchemy()
 
@@ -46,6 +47,17 @@ class ProductAlias(db.Model):
     product = db.relationship("Product", back_populates="aliases")
 
 
+class BrandPartnerRule(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    rule_name = db.Column(db.String(255), nullable=True)
+    sku_name_pattern = db.Column(db.String(255), nullable=False)
+    normalized_sku_pattern = db.Column(db.String(255), nullable=False, index=True)
+    store_name_pattern = db.Column(db.String(255), nullable=True)
+    normalized_store_pattern = db.Column(db.String(255), nullable=True, index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class UploadRun(db.Model):
     id = db.Column(db.String(32), primary_key=True)
     original_filename = db.Column(db.String(255), nullable=False)
@@ -74,6 +86,11 @@ class UploadLine(db.Model):
     resolved_sku_name = db.Column(db.String(255), nullable=True)
     resolved_rate = db.Column(db.Numeric(14, 4), nullable=True)
     resolved_vatable = db.Column(db.Boolean, nullable=False, default=False)
+    raw_reference_no = db.Column(db.String(128), nullable=True)
+    invoice_category = db.Column(db.String(8), nullable=True, index=True)
+    prefixed_reference_no = db.Column(db.String(160), nullable=True)
+    classification_source = db.Column(db.String(64), nullable=True)
+    bp_rule_reason = db.Column(db.String(255), nullable=True)
 
     run = db.relationship("UploadRun", back_populates="lines")
     product = db.relationship("Product")
@@ -115,6 +132,11 @@ class SalesOrderLine(db.Model):
     resolved_rate = db.Column(db.Numeric(14, 4), nullable=True)
     resolved_amount = db.Column(db.Numeric(14, 4), nullable=True)
     resolved_vatable = db.Column(db.Boolean, nullable=False, default=False)
+    raw_reference_no = db.Column(db.String(128), nullable=True)
+    invoice_category = db.Column(db.String(8), nullable=True, index=True)
+    prefixed_reference_no = db.Column(db.String(160), nullable=True)
+    classification_source = db.Column(db.String(64), nullable=True)
+    bp_rule_reason = db.Column(db.String(255), nullable=True)
 
     run = db.relationship("SalesOrderRun", back_populates="lines")
     product = db.relationship("Product")
@@ -153,6 +175,11 @@ class SkuAutomatorLine(db.Model):
     resolved_sku_name = db.Column(db.String(255), nullable=True)
     resolved_quantity = db.Column(db.Numeric(14, 4), nullable=True)
     resolved_rate = db.Column(db.Numeric(14, 4), nullable=True)
+    raw_reference_no = db.Column(db.String(128), nullable=True)
+    invoice_category = db.Column(db.String(8), nullable=True, index=True)
+    prefixed_reference_no = db.Column(db.String(160), nullable=True)
+    classification_source = db.Column(db.String(64), nullable=True)
+    bp_rule_reason = db.Column(db.String(255), nullable=True)
 
     run = db.relationship("SkuAutomatorRun", back_populates="lines")
     product = db.relationship("Product")
@@ -427,8 +454,59 @@ class LoadingTrackerRowItem(db.Model):
     row_id = db.Column(db.Integer, db.ForeignKey("loading_tracker_row.id"), nullable=False, index=True)
     sku_name = db.Column(db.String(255), nullable=False)
     quantity = db.Column(db.Numeric(14, 4), nullable=False, default=0)
+    raw_reference_no = db.Column(db.String(128), nullable=True)
+    invoice_category = db.Column(db.String(8), nullable=True, index=True)
+    prefixed_reference_no = db.Column(db.String(160), nullable=True)
+    classification_source = db.Column(db.String(64), nullable=True)
+    bp_rule_reason = db.Column(db.String(255), nullable=True)
 
     row = db.relationship("LoadingTrackerRow", back_populates="items")
+
+
+RUNTIME_SCHEMA_UPDATES = {
+    "upload_line": {
+        "raw_reference_no": "VARCHAR(128)",
+        "invoice_category": "VARCHAR(8)",
+        "prefixed_reference_no": "VARCHAR(160)",
+        "classification_source": "VARCHAR(64)",
+        "bp_rule_reason": "VARCHAR(255)",
+    },
+    "sales_order_line": {
+        "raw_reference_no": "VARCHAR(128)",
+        "invoice_category": "VARCHAR(8)",
+        "prefixed_reference_no": "VARCHAR(160)",
+        "classification_source": "VARCHAR(64)",
+        "bp_rule_reason": "VARCHAR(255)",
+    },
+    "sku_automator_line": {
+        "raw_reference_no": "VARCHAR(128)",
+        "invoice_category": "VARCHAR(8)",
+        "prefixed_reference_no": "VARCHAR(160)",
+        "classification_source": "VARCHAR(64)",
+        "bp_rule_reason": "VARCHAR(255)",
+    },
+    "loading_tracker_row_item": {
+        "raw_reference_no": "VARCHAR(128)",
+        "invoice_category": "VARCHAR(8)",
+        "prefixed_reference_no": "VARCHAR(160)",
+        "classification_source": "VARCHAR(64)",
+        "bp_rule_reason": "VARCHAR(255)",
+    },
+}
+
+
+def ensure_runtime_schema(engine) -> None:
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    with engine.begin() as connection:
+        for table_name, columns in RUNTIME_SCHEMA_UPDATES.items():
+            if table_name not in existing_tables:
+                continue
+            existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+            for column_name, column_type in columns.items():
+                if column_name in existing_columns:
+                    continue
+                connection.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {column_type}'))
 
 
 class LoadingTrackerInventoryItem(db.Model):

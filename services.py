@@ -16,9 +16,9 @@ from zoneinfo import ZoneInfo
 import xlwt
 from flask import current_app
 from openpyxl import load_workbook
-from sqlalchemy import func, select
+from sqlalchemy import func, select, true
 
-from models import Product, ProductAlias, UploadLine, UploadRun, UomImport, db
+from models import BrandPartnerRule, Product, ProductAlias, UploadLine, UploadRun, UomImport, db
 
 TRACKER_SHEET = "tracker"
 UOM_SHEET = "UOM"
@@ -47,6 +47,10 @@ VAT_LABEL = "VAT"
 VAT_RATE = Decimal("7.5")
 SEED_UOM_PATH = Path(__file__).resolve().parent / "data" / "latest_uom_seed.csv"
 INVALID_FILENAME_CHARS = r'[<>:"/\\|?*\x00-\x1f]'
+INVOICE_CATEGORY_BP = "BP"
+INVOICE_CATEGORY_VT = "VT"
+INVOICE_CATEGORY_NV = "NV"
+INVOICE_CATEGORIES = {INVOICE_CATEGORY_BP, INVOICE_CATEGORY_VT, INVOICE_CATEGORY_NV}
 
 
 class ServiceError(Exception):
@@ -76,6 +80,15 @@ class ProductMatch:
 
 
 @dataclass
+class InvoiceClassification:
+    raw_reference_no: str
+    invoice_category: str | None
+    prefixed_reference_no: str | None
+    classification_source: str | None
+    bp_rule_reason: str | None
+
+
+@dataclass
 class UnresolvedGroup:
     source_sku: str
     occurrences: int
@@ -100,6 +113,7 @@ class RunSummary:
     ignored_groups: list[IgnoredGroup]
     ready_lines: int
     ignored_lines: int
+    category_counts: dict[str, int]
 
 
 @dataclass
@@ -122,6 +136,60 @@ def build_dashboard_summary() -> DashboardSummary:
         recent_imports=list(db.session.scalars(select(UomImport).order_by(UomImport.created_at.desc()).limit(5))),
         recent_runs=list(db.session.scalars(select(UploadRun).order_by(UploadRun.created_at.desc()).limit(8))),
     )
+
+
+def list_brand_partner_rules() -> list[BrandPartnerRule]:
+    return list(
+        db.session.scalars(
+            select(BrandPartnerRule)
+            .where(BrandPartnerRule.is_active.is_(True))
+            .order_by(BrandPartnerRule.sku_name_pattern.asc(), BrandPartnerRule.store_name_pattern.asc())
+        )
+    )
+
+
+def save_brand_partner_rule(form_data: dict[str, Any]) -> BrandPartnerRule:
+    sku_name_pattern = _string_value(form_data.get("sku_name_pattern"))
+    if not sku_name_pattern:
+        raise ServiceError("SKU pattern is required for a Brand Partner rule.")
+
+    store_name_pattern = _string_value(form_data.get("store_name_pattern")) or None
+    rule_name = _string_value(form_data.get("rule_name")) or None
+    normalized_sku_pattern = normalize_sku(sku_name_pattern)
+    normalized_store_pattern = normalize_sku(store_name_pattern) if store_name_pattern else None
+
+    duplicate_query = select(BrandPartnerRule).where(
+        BrandPartnerRule.is_active.is_(True),
+        BrandPartnerRule.normalized_sku_pattern == normalized_sku_pattern,
+        BrandPartnerRule.normalized_store_pattern.is_(normalized_store_pattern)
+        if normalized_store_pattern is None
+        else BrandPartnerRule.normalized_store_pattern == normalized_store_pattern,
+    )
+    duplicate = db.session.scalar(duplicate_query)
+    if duplicate is not None:
+        raise ServiceError("That Brand Partner rule already exists.")
+
+    rule = BrandPartnerRule(
+        rule_name=rule_name,
+        sku_name_pattern=sku_name_pattern,
+        normalized_sku_pattern=normalized_sku_pattern,
+        store_name_pattern=store_name_pattern,
+        normalized_store_pattern=normalized_store_pattern,
+        is_active=True,
+    )
+    db.session.add(rule)
+    db.session.commit()
+    return rule
+
+
+def set_brand_partner_rule_active(rule_id: int, is_active: bool) -> BrandPartnerRule:
+    rule = db.session.get(BrandPartnerRule, rule_id)
+    if rule is None:
+        raise ServiceError("That Brand Partner rule could not be found.")
+
+    rule.is_active = is_active
+    db.session.commit()
+    return rule
 
 
 def import_uom_workbook(file_storage: Any) -> UomImport:
@@ -332,6 +400,7 @@ def create_tracker_run(file_storage: Any, timezone_name: str) -> UploadRun:
 
     products = list(db.session.scalars(select(Product)))
     aliases = list(db.session.scalars(select(ProductAlias)))
+    bp_rules = load_brand_partner_rules()
 
     for row_index in range(2, sheet.max_row + 1):
         order_number = _string_value(sheet.cell(row_index, 1).value)
@@ -345,6 +414,7 @@ def create_tracker_run(file_storage: Any, timezone_name: str) -> UploadRun:
                 continue
 
             run.rows_detected += 1
+            parsed_category, parsed_reference = split_prefixed_reference(order_number)
             line = UploadLine(
                 run_id=run.id,
                 order_number=order_number,
@@ -352,6 +422,10 @@ def create_tracker_run(file_storage: Any, timezone_name: str) -> UploadRun:
                 source_sku=sku_name,
                 normalized_source_sku=normalize_sku(sku_name),
                 quantity=quantity,
+                raw_reference_no=parsed_reference or order_number,
+                invoice_category=parsed_category,
+                prefixed_reference_no=order_number if parsed_category else None,
+                classification_source="prefixed_reference" if parsed_category else None,
             )
 
             match = resolve_product_match(sku_name, products, aliases)
@@ -367,7 +441,7 @@ def create_tracker_run(file_storage: Any, timezone_name: str) -> UploadRun:
                 line.status = "needs_review"
                 run.rows_needing_review += 1
             else:
-                apply_product_to_line(line, match.product, match.match_method)
+                apply_product_to_line(line, match.product, match.match_method, bp_rules=bp_rules)
                 run.rows_ready += 1
 
             db.session.add(line)
@@ -422,12 +496,20 @@ def build_run_summary(run_id: str) -> RunSummary | None:
     ignored_lines = db.session.scalar(
         select(func.count(UploadLine.id)).where(UploadLine.run_id == run_id, UploadLine.status == "ignored")
     ) or 0
+    ready_line_items = list(
+        db.session.scalars(select(UploadLine).where(UploadLine.run_id == run_id, UploadLine.status == "ready"))
+    )
+    category_counts = {
+        category: sum(1 for line in ready_line_items if line.invoice_category == category)
+        for category in [INVOICE_CATEGORY_BP, INVOICE_CATEGORY_VT, INVOICE_CATEGORY_NV]
+    }
     return RunSummary(
         run=run,
         unresolved_groups=groups,
         ignored_groups=ignored_groups,
         ready_lines=ready_lines,
         ignored_lines=ignored_lines,
+        category_counts=category_counts,
     )
 
 
@@ -486,6 +568,7 @@ def apply_review_decisions(run_id: str, mapping: dict[str, int]) -> UploadRun:
     if run is None:
         raise WorkbookShapeError("This upload run could not be found.")
 
+    bp_rules = load_brand_partner_rules()
     for source_sku, product_id in mapping.items():
         product = db.session.get(Product, product_id)
         if product is None:
@@ -513,7 +596,7 @@ def apply_review_decisions(run_id: str, mapping: dict[str, int]) -> UploadRun:
             )
         )
         for line in lines:
-            apply_product_to_line(line, product, "approved-alias")
+            apply_product_to_line(line, product, "approved-alias", bp_rules=bp_rules)
 
     _refresh_run_totals(run)
     db.session.commit()
@@ -557,26 +640,41 @@ def mark_source_sku_inactive(run_id: str, source_sku: str) -> tuple[UploadRun, P
         line.resolved_sku_name = product.sku_name
         line.resolved_rate = None
         line.resolved_vatable = False
+        line.invoice_category = None
+        line.prefixed_reference_no = None
+        line.classification_source = None
+        line.bp_rule_reason = None
 
     _refresh_run_totals(run)
     db.session.commit()
     return run, product
 
 
-def export_run_to_xls(run_id: str) -> tuple[str, bytes]:
+def export_run_to_xls(run_id: str, invoice_category: str | None = None) -> tuple[str, bytes]:
     run = db.session.get(UploadRun, run_id)
     if run is None:
         raise WorkbookShapeError("This upload run could not be found.")
     if run.rows_needing_review > 0:
         raise WorkbookShapeError("Resolve all review items before downloading the final file.")
 
+    selected_category = _string_value(invoice_category).upper()
+    if selected_category and selected_category not in INVOICE_CATEGORIES:
+        raise WorkbookShapeError("The selected invoice category is not supported.")
+
     lines = list(
         db.session.scalars(
             select(UploadLine)
-            .where(UploadLine.run_id == run_id, UploadLine.status == "ready")
+            .where(
+                UploadLine.run_id == run_id,
+                UploadLine.status == "ready",
+                UploadLine.invoice_category == selected_category if selected_category else true(),
+            )
             .order_by(UploadLine.id.asc())
         )
     )
+    if not lines:
+        label = selected_category or "selected"
+        raise WorkbookShapeError(f"There are no ready {label} lines to export.")
     workbook = xlwt.Workbook()
     sheet = workbook.add_sheet(TEMPLATE_SHEET)
 
@@ -605,7 +703,7 @@ def export_run_to_xls(run_id: str) -> tuple[str, bytes]:
         vat_amount = (amount * VAT_RATE / Decimal("100")).quantize(Decimal("0.01")) if line.resolved_vatable else ""
         row = [
             run.invoice_date,
-            line.order_number,
+            line.prefixed_reference_no or line.order_number,
             VOUCHER_TYPE_NAME,
             line.supermarket_name,
             line.resolved_sku_name,
@@ -633,7 +731,7 @@ def export_run_to_xls(run_id: str) -> tuple[str, bytes]:
     run.status = "exported"
     run.exported_at = datetime.now(ZoneInfo(current_app.config["APP_TIMEZONE"]))
     db.session.commit()
-    return _build_export_filename(run), stream.getvalue()
+    return _build_export_filename(run, selected_category or None), stream.getvalue()
 
 
 def export_ignored_history_to_xls(run_id: str) -> tuple[str, bytes]:
@@ -793,10 +891,11 @@ def tomorrow_in_timezone(timezone_name: str) -> datetime:
     return datetime.now(ZoneInfo(timezone_name)) + timedelta(days=1)
 
 
-def _build_export_filename(run: UploadRun) -> str:
+def _build_export_filename(run: UploadRun, invoice_category: str | None = None) -> str:
     source_label = _clean_filename_part(Path(run.original_filename or "tracker.xlsx").stem, "Tracker")
     invoice_label = _clean_filename_part(run.invoice_date, "Invoice Date")
-    return f"DALA Delivery Note - {invoice_label} - {source_label}.xls"
+    category_label = _clean_filename_part(invoice_category or "All", "All")
+    return f"DALA Delivery Note - {invoice_label} - {category_label} - {source_label}.xls"
 
 
 def _clean_filename_part(value: str, fallback: str) -> str:
@@ -824,13 +923,153 @@ def _build_ignored_groups(grouped_lines: dict[str, list[UploadLine]]) -> list[Ig
     return ignored_groups
 
 
-def apply_product_to_line(line: UploadLine, product: Product, match_method: str) -> None:
+def load_brand_partner_rules() -> list[BrandPartnerRule]:
+    return list_brand_partner_rules()
+
+
+def split_prefixed_reference(value: str | None) -> tuple[str | None, str]:
+    text = _string_value(value)
+    if not text:
+        return None, ""
+    upper = text.upper()
+    for category in sorted(INVOICE_CATEGORIES):
+        prefix = f"{category}-"
+        if upper.startswith(prefix):
+            return category, text[len(prefix) :].strip()
+    return None, text
+
+
+def build_prefixed_reference(invoice_category: str | None, raw_reference_no: str | None) -> str | None:
+    category = _string_value(invoice_category).upper()
+    raw_reference = _string_value(raw_reference_no)
+    if not category or category not in INVOICE_CATEGORIES or not raw_reference:
+        return None
+    return f"{category}-{raw_reference}"
+
+
+def normalize_invoice_rule_key(value: str | None) -> list[str]:
+    return [token for token in normalize_sku(_string_value(value)).split() if token and token != "X000D"]
+
+
+def _tokens_match_rule(target_value: str | None, pattern_value: str | None) -> bool:
+    pattern_tokens = normalize_invoice_rule_key(pattern_value)
+    if not pattern_tokens:
+        return True
+    target_tokens = set(normalize_invoice_rule_key(target_value))
+    return all(token in target_tokens for token in pattern_tokens)
+
+
+def classify_invoice_line(
+    *,
+    raw_reference_no: str | None,
+    store_name: str | None,
+    sku_name: str | None,
+    product: Product | None,
+    bp_rules: list[BrandPartnerRule] | None = None,
+    existing_category: str | None = None,
+    existing_prefixed_reference_no: str | None = None,
+) -> InvoiceClassification:
+    raw_reference = _string_value(raw_reference_no)
+    existing = _string_value(existing_category).upper()
+    if existing in INVOICE_CATEGORIES:
+        prefixed_reference = existing_prefixed_reference_no or build_prefixed_reference(existing, raw_reference)
+        return InvoiceClassification(
+            raw_reference_no=raw_reference,
+            invoice_category=existing,
+            prefixed_reference_no=prefixed_reference,
+            classification_source="prefixed_reference",
+            bp_rule_reason=None,
+        )
+
+    resolved_sku_name = _string_value(sku_name or (product.sku_name if product is not None else ""))
+    rules = bp_rules if bp_rules is not None else load_brand_partner_rules()
+    for rule in rules:
+        if not rule.is_active:
+            continue
+        if not _tokens_match_rule(resolved_sku_name, rule.sku_name_pattern):
+            continue
+        if rule.store_name_pattern and not _tokens_match_rule(store_name, rule.store_name_pattern):
+            continue
+        reason = rule.rule_name or rule.store_name_pattern or rule.sku_name_pattern
+        return InvoiceClassification(
+            raw_reference_no=raw_reference,
+            invoice_category=INVOICE_CATEGORY_BP,
+            prefixed_reference_no=build_prefixed_reference(INVOICE_CATEGORY_BP, raw_reference),
+            classification_source="bp_rule",
+            bp_rule_reason=reason,
+        )
+
+    if product is not None:
+        category = INVOICE_CATEGORY_VT if product.vatable else INVOICE_CATEGORY_NV
+        return InvoiceClassification(
+            raw_reference_no=raw_reference,
+            invoice_category=category,
+            prefixed_reference_no=build_prefixed_reference(category, raw_reference),
+            classification_source="product_vat",
+            bp_rule_reason=None,
+        )
+
+    return InvoiceClassification(
+        raw_reference_no=raw_reference,
+        invoice_category=None,
+        prefixed_reference_no=existing_prefixed_reference_no or None,
+        classification_source=None,
+        bp_rule_reason=None,
+    )
+
+
+def apply_invoice_classification_to_record(
+    record: Any,
+    *,
+    product: Product | None,
+    store_name: str | None,
+    sku_name: str | None,
+    raw_reference_no: str | None,
+    bp_rules: list[BrandPartnerRule] | None = None,
+) -> InvoiceClassification:
+    parsed_category, stripped_reference = split_prefixed_reference(
+        getattr(record, "prefixed_reference_no", None) or getattr(record, "order_reference_no", None)
+    )
+    classification = classify_invoice_line(
+        raw_reference_no=raw_reference_no or stripped_reference,
+        store_name=store_name,
+        sku_name=sku_name,
+        product=product,
+        bp_rules=bp_rules,
+        existing_category=parsed_category or getattr(record, "invoice_category", None),
+        existing_prefixed_reference_no=getattr(record, "prefixed_reference_no", None)
+        or getattr(record, "order_reference_no", None),
+    )
+    record.raw_reference_no = classification.raw_reference_no or None
+    record.invoice_category = classification.invoice_category
+    record.prefixed_reference_no = classification.prefixed_reference_no
+    record.classification_source = classification.classification_source
+    record.bp_rule_reason = classification.bp_rule_reason
+    return classification
+
+
+def apply_product_to_line(
+    line: UploadLine,
+    product: Product,
+    match_method: str,
+    *,
+    bp_rules: list[BrandPartnerRule] | None = None,
+) -> None:
     line.product_id = product.id
     line.status = "ready"
     line.matched_by = match_method
     line.resolved_sku_name = product.sku_name
     line.resolved_rate = product.price
     line.resolved_vatable = bool(product.vatable)
+    classification = apply_invoice_classification_to_record(
+        line,
+        product=product,
+        store_name=line.supermarket_name,
+        sku_name=product.sku_name,
+        raw_reference_no=getattr(line, "raw_reference_no", None) or line.order_number,
+        bp_rules=bp_rules,
+    )
+    line.order_number = classification.prefixed_reference_no or classification.raw_reference_no or line.order_number
 
 
 def _refresh_run_totals(run: UploadRun) -> None:

@@ -40,7 +40,16 @@ from models import (
     UploadRun,
     db,
 )
-from services import DATE_FORMAT, apply_product_to_line, resolve_product_match, tomorrow_in_timezone
+from services import (
+    DATE_FORMAT,
+    apply_invoice_classification_to_record,
+    apply_product_to_line,
+    build_prefixed_reference,
+    load_brand_partner_rules,
+    resolve_product_match,
+    split_prefixed_reference,
+    tomorrow_in_timezone,
+)
 
 DAY_SHEET_NAMES = ["Mon", "Tues", "Wed", "Thurs", "Fri", "Sat"]
 LL_SHEET_MAP = {
@@ -1161,11 +1170,16 @@ def save_loading_tracker_row(
     row.sort_order = _next_sort_order(tracker_import, day, row_state, row.id)
 
     row.items.clear()
-    for sku_name, quantity in items:
+    for item in items:
         row.items.append(
             LoadingTrackerRowItem(
-                sku_name=sku_name,
-                quantity=_decimal_or_none(quantity) or Decimal("0"),
+                sku_name=item["sku"],
+                quantity=_decimal_or_none(item["quantity"]) or Decimal("0"),
+                raw_reference_no=item.get("raw_reference_no") or None,
+                invoice_category=item.get("invoice_category") or None,
+                prefixed_reference_no=item.get("prefixed_reference_no") or None,
+                classification_source="planner_text" if item.get("prefixed_reference_no") else None,
+                bp_rule_reason=None,
             )
         )
 
@@ -1560,6 +1574,7 @@ def create_delivery_note_run_from_loading_day(import_id: str, day_name: str, tim
 
     products = list(db.session.scalars(select(Product)))
     aliases = list(db.session.scalars(select(ProductAlias)))
+    bp_rules = load_brand_partner_rules()
 
     run = UploadRun(
         id=uuid4().hex,
@@ -1580,13 +1595,20 @@ def create_delivery_note_run_from_loading_day(import_id: str, day_name: str, tim
             if quantity <= 0:
                 continue
             run.rows_detected += 1
+            item_reference = item.raw_reference_no or planning_ref
+            prefixed_reference = item.prefixed_reference_no or build_prefixed_reference(item.invoice_category, item_reference)
             line = UploadLine(
                 run_id=run.id,
-                order_number=planning_ref,
+                order_number=prefixed_reference or item_reference,
                 supermarket_name=row.store_name,
                 source_sku=item.sku_name,
                 normalized_source_sku=_normalize_text(item.sku_name).upper(),
                 quantity=quantity,
+                raw_reference_no=item_reference,
+                invoice_category=item.invoice_category or None,
+                prefixed_reference_no=prefixed_reference or None,
+                classification_source=item.classification_source or None,
+                bp_rule_reason=item.bp_rule_reason or None,
             )
             match = resolve_product_match(item.sku_name, products, aliases)
             if match is None:
@@ -1601,7 +1623,7 @@ def create_delivery_note_run_from_loading_day(import_id: str, day_name: str, tim
                 line.status = "needs_review"
                 run.rows_needing_review += 1
             else:
-                apply_product_to_line(line, match.product, match.match_method)
+                apply_product_to_line(line, match.product, match.match_method, bp_rules=bp_rules)
                 run.rows_ready += 1
             db.session.add(line)
 
@@ -1672,6 +1694,11 @@ def _save_row_record(
             LoadingTrackerRowItem(
                 sku_name=item["sku"],
                 quantity=_decimal_or_none(item["quantity"]) or Decimal("0"),
+                raw_reference_no=item.get("raw_reference_no") or None,
+                invoice_category=item.get("invoice_category") or None,
+                prefixed_reference_no=item.get("prefixed_reference_no") or None,
+                classification_source=item.get("classification_source") or None,
+                bp_rule_reason=item.get("bp_rule_reason") or None,
             )
         )
 
@@ -1749,19 +1776,35 @@ def _build_day_suggestions(
 
 
 def _row_quantity_for_sku(row: LoadingTrackerRow, sku_name: str) -> float:
+    total = 0.0
     for item in row.items:
         if item.sku_name == sku_name:
-            return round(_float_value(item.quantity), 4)
-    return 0.0
+            total += _float_value(item.quantity)
+    return round(total, 4)
 
 
 def _serialize_row(row: LoadingTrackerRow) -> dict[str, Any]:
     items = [
-        {"sku": item.sku_name, "quantity": round(_float_value(item.quantity), 2)}
+        {
+            "sku": item.sku_name,
+            "quantity": round(_float_value(item.quantity), 2),
+            "invoice_category": item.invoice_category or "",
+            "raw_reference_no": item.raw_reference_no or "",
+            "prefixed_reference_no": item.prefixed_reference_no or "",
+            "classification_source": item.classification_source or "",
+            "bp_rule_reason": item.bp_rule_reason or "",
+        }
         for item in row.items
         if _float_value(item.quantity) > 0
     ]
-    items.sort(key=lambda item: (-item["quantity"], item["sku"]))
+    items.sort(
+        key=lambda item: (
+            -item["quantity"],
+            item["sku"],
+            item["prefixed_reference_no"] or item["raw_reference_no"],
+            item["invoice_category"],
+        )
+    )
     return {
         "id": row.id,
         "row_state": row.row_state,
@@ -1830,19 +1873,52 @@ def _group_sku_automator_store_rows(lines: list[SkuAutomatorLine]) -> list[dict[
         if line.order_date and (not entry["delivery_date"] or str(line.order_date) < str(entry["delivery_date"])):
             entry["delivery_date"] = line.order_date
         if line.order_reference_no:
-            entry["order_references"].add(line.order_reference_no)
+            entry["order_references"].add(line.prefixed_reference_no or line.order_reference_no)
         sku_name = line.resolved_sku_name or line.source_sku
         quantity = _float_value(line.resolved_quantity)
         if quantity > 0:
-            entry["items"][sku_name] = round(entry["items"].get(sku_name, 0.0) + quantity, 4)
+            item_key = (
+                sku_name,
+                line.invoice_category or "",
+                line.prefixed_reference_no or "",
+                line.raw_reference_no or "",
+            )
+            item_entry = entry["items"].setdefault(
+                item_key,
+                {
+                    "sku": sku_name,
+                    "quantity": 0.0,
+                    "invoice_category": line.invoice_category or "",
+                    "prefixed_reference_no": line.prefixed_reference_no or "",
+                    "raw_reference_no": line.raw_reference_no or "",
+                    "classification_source": line.classification_source or "",
+                    "bp_rule_reason": line.bp_rule_reason or "",
+                },
+            )
+            item_entry["quantity"] = round(item_entry["quantity"] + quantity, 4)
         entry["value"] = round(entry["value"] + _float_value(line.source_value), 2)
 
     rows: list[dict[str, Any]] = []
     for entry in sorted(grouped.values(), key=lambda item: str(item["store_name"]).upper()):
         items = [
-            {"sku": sku_name, "quantity": round(quantity, 2)}
-            for sku_name, quantity in sorted(entry["items"].items(), key=lambda item: (-item[1], item[0]))
-            if quantity > 0
+            {
+                "sku": item["sku"],
+                "quantity": round(item["quantity"], 2),
+                "invoice_category": item["invoice_category"],
+                "prefixed_reference_no": item["prefixed_reference_no"],
+                "raw_reference_no": item["raw_reference_no"],
+                "classification_source": item["classification_source"],
+                "bp_rule_reason": item["bp_rule_reason"],
+            }
+            for _, item in sorted(
+                entry["items"].items(),
+                key=lambda pair: (
+                    -pair[1]["quantity"],
+                    pair[1]["sku"],
+                    pair[1]["prefixed_reference_no"] or pair[1]["raw_reference_no"],
+                ),
+            )
+            if item["quantity"] > 0
         ]
         if not items:
             continue
@@ -1963,16 +2039,22 @@ def _row_items_text(row: LoadingTrackerRow | None) -> str:
         quantity = round(_float_value(item.quantity), 2)
         if quantity <= 0:
             continue
-        items.append(f"{item.sku_name} = {quantity:g}")
+        line = f"{item.sku_name} = {quantity:g}"
+        reference = item.prefixed_reference_no or build_prefixed_reference(item.invoice_category, item.raw_reference_no)
+        if reference:
+            line += f" | {reference}"
+        items.append(line)
     return "\n".join(items)
 
 
-def _parse_items_text(text: str) -> list[tuple[str, float]]:
-    parsed: list[tuple[str, float]] = []
+def _parse_items_text(text: str) -> list[dict[str, Any]]:
+    parsed: list[dict[str, Any]] = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
             continue
+        metadata_parts = [part.strip() for part in line.split("|")]
+        line = metadata_parts[0]
         separator = None
         for candidate in ("=", "\t", "|", ":"):
             if candidate in line:
@@ -1989,7 +2071,31 @@ def _parse_items_text(text: str) -> list[tuple[str, float]]:
         quantity = _float_value(quantity_text)
         if not sku_name or quantity <= 0:
             continue
-        parsed.append((sku_name, round(quantity, 4)))
+        invoice_category = ""
+        raw_reference_no = ""
+        prefixed_reference_no = ""
+        if len(metadata_parts) >= 2:
+            category, stripped_reference = split_prefixed_reference(metadata_parts[1])
+            if category:
+                invoice_category = category
+                raw_reference_no = stripped_reference
+                prefixed_reference_no = metadata_parts[1]
+            elif metadata_parts[1].upper() in {"BP", "VT", "NV"}:
+                invoice_category = metadata_parts[1].upper()
+                if len(metadata_parts) >= 3:
+                    raw_reference_no = metadata_parts[2]
+                    prefixed_reference_no = build_prefixed_reference(invoice_category, raw_reference_no) or ""
+            else:
+                raw_reference_no = metadata_parts[1]
+        parsed.append(
+            {
+                "sku": sku_name,
+                "quantity": round(quantity, 4),
+                "invoice_category": invoice_category,
+                "raw_reference_no": raw_reference_no,
+                "prefixed_reference_no": prefixed_reference_no,
+            }
+        )
     return parsed
 
 

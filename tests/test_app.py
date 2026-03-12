@@ -9,16 +9,20 @@ from openpyxl import Workbook, load_workbook
 from app import _database_uri, create_app
 from loading_tracker_services import create_loading_tracker_import_job, run_loading_tracker_import_job
 from models import (
+    BrandPartnerRule,
     LoadingTrackerDailyCount,
     LoadingTrackerDay,
     LoadingTrackerEvent,
     LoadingTrackerImport,
     LoadingTrackerImportJob,
     LoadingTrackerRow,
+    LoadingTrackerRowItem,
     LoadingTrackerTemplate,
     Product,
     ProductAlias,
+    SalesOrderLine,
     SalesOrderRun,
+    SkuAutomatorLine,
     SkuAutomatorRun,
     UploadRun,
     db,
@@ -341,6 +345,69 @@ def build_pepup_orders_workbook() -> BytesIO:
     return stream
 
 
+def build_mixed_category_pepup_orders_workbook() -> BytesIO:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Order Item List"
+    sheet.append(
+        [
+            "Date of Order",
+            "Time of Order",
+            "Order Number",
+            "Retailer Name",
+            "Item Name",
+            "UOM",
+            "Quantity",
+            "Price",
+            "Total",
+        ]
+    )
+    sheet.append(
+        [
+            "2026-03-12 00:00:00",
+            "08:15:00",
+            "17575653",
+            "Globus Supermarket OKOTA",
+            "SKU Alpha",
+            "cases",
+            1,
+            100,
+            100,
+        ]
+    )
+    sheet.append(
+        [
+            "2026-03-12 00:00:00",
+            "08:16:00",
+            "17575653",
+            "Globus Supermarket OKOTA",
+            "SKU Beta",
+            "cases",
+            1,
+            120,
+            120,
+        ]
+    )
+    sheet.append(
+        [
+            "2026-03-12 00:00:00",
+            "08:17:00",
+            "17575653",
+            "Globus Supermarket OKOTA",
+            "SKU Vanilla",
+            "cases",
+            1,
+            80,
+            80,
+        ]
+    )
+
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    return stream
+
+
 def build_pepup_orders_tab_delimited_export() -> BytesIO:
     rows = [
         [
@@ -556,13 +623,23 @@ def test_end_to_end_review_and_alias_memory() -> None:
         assert response.status_code == 200
         html = response.get_data(as_text=True)
         assert "rows are now ready for export" in html
-        assert "Download XLS" in html
+        assert "Download VT" in html
+        assert "Download NV" in html
+        assert "Download BP" not in html
 
-        download = client.get(f"/runs/{run_id}/download")
-        assert download.status_code == 200
-        assert download.mimetype == "application/vnd.ms-excel"
-        disposition = download.headers["Content-Disposition"]
-        assert "DALA Delivery Note -" in disposition
+        download_vt = client.get(f"/runs/{run_id}/download?category=VT")
+        assert download_vt.status_code == 200
+        assert download_vt.mimetype == "application/vnd.ms-excel"
+        disposition_vt = download_vt.headers["Content-Disposition"]
+        assert "DALA Delivery Note -" in disposition_vt
+        assert " VT " in disposition_vt or "-VT-" in disposition_vt or "- VT -" in disposition_vt
+
+        download_nv = client.get(f"/runs/{run_id}/download?category=NV")
+        assert download_nv.status_code == 200
+        assert download_nv.mimetype == "application/vnd.ms-excel"
+        disposition_nv = download_nv.headers["Content-Disposition"]
+        assert "DALA Delivery Note -" in disposition_nv
+        assert " NV " in disposition_nv or "-NV-" in disposition_nv or "- NV -" in disposition_nv
 
         with app.app_context():
             alias = db.session.query(ProductAlias).filter_by(alias_name="SKU Vanila").one_or_none()
@@ -570,8 +647,8 @@ def test_end_to_end_review_and_alias_memory() -> None:
             assert alias is not None
             assert run is not None
             assert run.status == "exported"
-            assert run.invoice_date in disposition
-            assert "tracker" in disposition
+            assert run.invoice_date in disposition_vt
+            assert "tracker" in disposition_vt
             db.session.remove()
             db.engine.dispose()
 
@@ -1705,7 +1782,17 @@ def test_loading_tracker_counts_handoff_history_and_carry_forward() -> None:
         handoff_html = handoff.get_data(as_text=True)
         assert handoff.status_code == 200
         assert "final adjusted day plan has been handed off" in handoff_html
-        assert "Download XLS" in handoff_html
+        assert "Download NV" in handoff_html
+        assert "Download VT" not in handoff_html
+        assert "Download BP" not in handoff_html
+
+        with app.app_context():
+            upload_run = db.session.query(UploadRun).one()
+            handoff_run_id = upload_run.id
+
+        handoff_download = client.get(f"/runs/{handoff_run_id}/download?category=NV")
+        assert handoff_download.status_code == 200
+        assert handoff_download.mimetype == "application/vnd.ms-excel"
 
         history = client.get(f"/loading-tracker/imports/{import_id}/history")
         history_html = history.get_data(as_text=True)
@@ -1944,6 +2031,20 @@ def test_sku_automator_run_can_start_loading_tracker_week_directly() -> None:
             assert {row.source_kind for row in planned_rows} == {"sku_automator"}
             assert {row.store_name for row in tues_rows} == {"Store One", "Store Two"}
             assert pending_count == 1
+            tues_items = [
+                item
+                for row in tues_rows
+                for item in db.session.query(LoadingTrackerRowItem)
+                .filter_by(row_id=row.id)
+                .order_by(LoadingTrackerRowItem.id.asc())
+                .all()
+            ]
+            assert {item.invoice_category for item in tues_items} == {"VT", "NV"}
+            assert {item.prefixed_reference_no for item in tues_items} == {
+                "VT-17551810",
+                "NV-17551811",
+                "VT-17551812",
+            }
             db.session.remove()
             db.engine.dispose()
 
@@ -2001,14 +2102,14 @@ def test_sales_order_run_generates_tally_ready_workbook() -> None:
         row2 = [output.cell(2, c).value for c in range(1, 13)]
         row3 = [output.cell(3, c).value for c in range(1, 13)]
 
-        assert row2[1] == "17552475"
+        assert row2[1] == "VT-17552475"
         assert row2[4] == "SKU Alpha"
         assert row2[5] == "2ctn"
         assert row2[6] == 100
         assert row2[7] == 200
         assert row2[9] == "VAT"
 
-        assert row3[1] == "17552476"
+        assert row3[1] == "NV-17552476"
         assert row3[4] == "SKU Vanilla"
         assert row3[5] == "0.5ctn"
         assert row3[6] == 120
@@ -2017,9 +2118,97 @@ def test_sales_order_run_generates_tally_ready_workbook() -> None:
 
         with app.app_context():
             run = db.session.get(SalesOrderRun, run_id)
+            lines = db.session.query(SalesOrderLine).filter_by(run_id=run_id).order_by(SalesOrderLine.id.asc()).all()
             assert run is not None
             assert run.rows_ready == 2
             assert run.rows_needing_review == 0
+            assert [line.invoice_category for line in lines] == ["VT", "NV"]
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_sales_order_run_splits_same_reference_into_bp_vt_and_nv_lines() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        uom = Workbook()
+        sheet = uom.active
+        sheet.title = "UOM"
+        sheet.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
+        sheet.append(["SKU Alpha", "ctn", "pcs", 12, "Yes", 100])
+        sheet.append(["SKU Beta", "ctn", "pcs", 12, "Yes", 120])
+        sheet.append(["SKU Vanilla", "ctn", "pcs", 12, "No", 80])
+        uom_bytes = BytesIO()
+        uom.save(uom_bytes)
+        uom_bytes.seek(0)
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(uom_bytes.getvalue()), "uom.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        with app.app_context():
+            db.session.add(
+                BrandPartnerRule(
+                    rule_name="Globus Alpha BP",
+                    sku_name_pattern="SKU Alpha",
+                    normalized_sku_pattern="SKU ALPHA",
+                    store_name_pattern="Globus",
+                    normalized_store_pattern="GLOBUS",
+                    is_active=True,
+                )
+            )
+            db.session.commit()
+
+        upload = client.post(
+            "/sales-order/import",
+            data={"sales_order_workbook": (BytesIO(build_mixed_category_pepup_orders_workbook().getvalue()), "pepup.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert upload.status_code == 302
+        run_id = upload.headers["Location"].split("/sales-order/runs/")[1]
+
+        download = client.get(f"/sales-order/runs/{run_id}/download")
+        assert download.status_code == 200
+
+        workbook = load_workbook(BytesIO(download.data), data_only=True)
+        output = workbook["Sales Order"]
+        row2 = [output.cell(2, c).value for c in range(1, 13)]
+        row3 = [output.cell(3, c).value for c in range(1, 13)]
+        row4 = [output.cell(4, c).value for c in range(1, 13)]
+
+        assert row2[1] == "BP-17575653"
+        assert row2[4] == "SKU Alpha"
+        assert row2[9] == "VAT"
+
+        assert row3[1] == "VT-17575653"
+        assert row3[4] == "SKU Beta"
+        assert row3[9] == "VAT"
+
+        assert row4[1] == "NV-17575653"
+        assert row4[4] == "SKU Vanilla"
+        assert row4[9] in ("", None)
+
+        with app.app_context():
+            lines = db.session.query(SalesOrderLine).filter_by(run_id=run_id).order_by(SalesOrderLine.id.asc()).all()
+            assert [line.invoice_category for line in lines] == ["BP", "VT", "NV"]
+            assert [line.prefixed_reference_no for line in lines] == [
+                "BP-17575653",
+                "VT-17575653",
+                "NV-17575653",
+            ]
+            assert lines[0].classification_source == "bp_rule"
+            assert lines[0].bp_rule_reason == "Globus Alpha BP"
             db.session.remove()
             db.engine.dispose()
 
@@ -2076,7 +2265,7 @@ def test_sales_order_run_accepts_tab_delimited_pepup_export_with_xls_extension()
         row3 = [output.cell(3, c).value for c in range(1, 13)]
 
         assert row2[0].date().isoformat() == "2026-03-12"
-        assert row2[1] == "17575653"
+        assert row2[1] == "VT-17575653"
         assert row2[4] == "SKU Alpha"
         assert row2[5] == "2ctn"
         assert row2[6] == 93.02
@@ -2085,7 +2274,7 @@ def test_sales_order_run_accepts_tab_delimited_pepup_export_with_xls_extension()
         assert output.column_dimensions["A"].width >= 16
 
         assert row3[0].date().isoformat() == "2026-03-12"
-        assert row3[1] == "17575278"
+        assert row3[1] == "NV-17575278"
         assert row3[4] == "SKU Vanilla"
         assert row3[5] == "0.5ctn"
         assert row3[7] == 60
@@ -2159,16 +2348,18 @@ def test_sku_automator_run_generates_register_and_matrix() -> None:
         assert register_row2[2] == "SKU Alpha"
         assert register_row2[3] == 2
         assert register_row2[5] == 200
-        assert register_row2[6] == "17551810"
+        assert register_row2[6] == "VT-17551810"
 
         assert register_row3[2] == "SKU Vanilla"
         assert register_row3[3] == 0.5
         assert register_row3[5] == 60
+        assert register_row3[6] == "NV-17551811"
 
         assert register_row4[1] == "Store Two"
         assert register_row4[2] == "SKU Alpha"
         assert register_row4[3] == 1
         assert register_row4[5] == 100
+        assert register_row4[6] == "VT-17551812"
 
         matrix_headers = [matrix.cell(1, c).value for c in range(1, 4)]
         matrix_row2 = [matrix.cell(2, c).value for c in range(1, 4)]
@@ -2180,8 +2371,10 @@ def test_sku_automator_run_generates_register_and_matrix() -> None:
 
         with app.app_context():
             run = db.session.get(SkuAutomatorRun, run_id)
+            lines = db.session.query(SkuAutomatorLine).filter_by(run_id=run_id).order_by(SkuAutomatorLine.id.asc()).all()
             assert run is not None
             assert run.rows_ready == 3
             assert run.store_count == 2
+            assert [line.invoice_category for line in lines] == ["VT", "NV", "VT"]
             db.session.remove()
             db.engine.dispose()

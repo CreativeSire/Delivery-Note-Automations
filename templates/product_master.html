@@ -192,6 +192,61 @@
           {% endif %}
         </div>
       </form>
+
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Invoice rules</p>
+          <h2>Brand Partner overrides</h2>
+        </div>
+      </div>
+
+      <p class="page-copy database-form-copy">Use these rules when a SKU should become <code>BP-</code> for a specific store or for every store.</p>
+
+      <form class="form-stack" action="{{ url_for('create_brand_partner_rule') }}" method="post">
+        <input type="hidden" name="q" value="{{ search_query }}">
+        <label class="field">
+          <span class="field-label">SKU pattern</span>
+          <input name="sku_name_pattern" type="text" placeholder="SKU Alpha" required>
+        </label>
+        <label class="field">
+          <span class="field-label">Store pattern</span>
+          <input name="store_name_pattern" type="text" placeholder="Optional, e.g. Globus Supermarket OKOTA">
+        </label>
+        <label class="field">
+          <span class="field-label">Rule label</span>
+          <input name="rule_name" type="text" placeholder="Optional reason shown in classification">
+        </label>
+        <button class="secondary-button" type="submit">Add BP rule</button>
+      </form>
+
+      {% if brand_partner_rules %}
+        <div class="data-table line-table database-rules-table">
+          <div class="table-line table-head-line table-line-rule admin-table-head">
+            <span>SKU pattern</span>
+            <span>Store pattern</span>
+            <span>Remove</span>
+          </div>
+          {% for rule in brand_partner_rules %}
+            <div class="table-line table-line-rule admin-table-row">
+              <span>
+                <strong>{{ rule.sku_name_pattern }}</strong>
+                {% if rule.rule_name %}
+                  <small>{{ rule.rule_name }}</small>
+                {% endif %}
+              </span>
+              <span>{{ rule.store_name_pattern or 'All stores' }}</span>
+              <span>
+                <form action="{{ url_for('deactivate_brand_partner_rule', rule_id=rule.id) }}" method="post">
+                  <input type="hidden" name="q" value="{{ search_query }}">
+                  <button class="text-button danger" type="submit">Remove</button>
+                </form>
+              </span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No Brand Partner override rules yet.</p>
+      {% endif %}
     </article>
   </section>
 

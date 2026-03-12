@@ -15,7 +15,16 @@ from openpyxl.styles import Font, PatternFill
 from sqlalchemy import func, select
 
 from models import Product, ProductAlias, SalesOrderLine, SalesOrderRun, SkuAutomatorLine, SkuAutomatorRun, db
-from services import ProductMatch, normalize_sku, resolve_product_match, suggest_products
+from services import (
+    ProductMatch,
+    apply_invoice_classification_to_record,
+    build_prefixed_reference,
+    load_brand_partner_rules,
+    normalize_sku,
+    resolve_product_match,
+    split_prefixed_reference,
+    suggest_products,
+)
 
 try:
     import xlrd  # type: ignore
@@ -139,6 +148,7 @@ def create_sales_order_run(file_storage: Any) -> SalesOrderRun:
 
     products = list(db.session.scalars(select(Product)))
     aliases = list(db.session.scalars(select(ProductAlias)))
+    bp_rules = load_brand_partner_rules()
 
     for row_index in range(2, sheet.max_row + 1):
         source_sku = _string_value(sheet.cell(row_index, header_map["source_sku"]).value)
@@ -174,6 +184,7 @@ def create_sales_order_run(file_storage: Any) -> SalesOrderRun:
             source_quantity=source_quantity,
             source_rate=source_rate,
             source_amount=source_amount,
+            raw_reference_no=order_number,
         )
 
         match = resolve_product_match(source_sku, products, aliases)
@@ -182,7 +193,7 @@ def create_sales_order_run(file_storage: Any) -> SalesOrderRun:
             run.rows_needing_review += 1
         else:
             try:
-                _apply_product_to_sales_order_line(line, match)
+                _apply_product_to_sales_order_line(line, match, bp_rules=bp_rules)
                 run.rows_ready += 1
             except WorkflowError:
                 line.status = "needs_review"
@@ -219,6 +230,7 @@ def create_sku_automator_run(file_storage: Any) -> SkuAutomatorRun:
 
     products = list(db.session.scalars(select(Product)))
     aliases = list(db.session.scalars(select(ProductAlias)))
+    bp_rules = load_brand_partner_rules()
 
     current_header: dict[str, str] | None = None
     voucher_numbers: set[str] = set()
@@ -250,6 +262,7 @@ def create_sku_automator_run(file_storage: Any) -> SkuAutomatorRun:
             continue
 
         run.line_count += 1
+        parsed_category, parsed_reference = split_prefixed_reference(current_header["order_reference_no"])
         line = SkuAutomatorLine(
             run_id=run.id,
             order_date=current_header["order_date"],
@@ -259,6 +272,10 @@ def create_sku_automator_run(file_storage: Any) -> SkuAutomatorRun:
             source_sku=source_sku,
             normalized_source_sku=normalize_sku(source_sku),
             source_value=source_value,
+            raw_reference_no=parsed_reference or (current_header["order_reference_no"] or None),
+            invoice_category=parsed_category,
+            prefixed_reference_no=(current_header["order_reference_no"] or None) if parsed_category else None,
+            classification_source="prefixed_reference" if parsed_category else None,
         )
 
         match = resolve_product_match(source_sku, products, aliases)
@@ -267,7 +284,7 @@ def create_sku_automator_run(file_storage: Any) -> SkuAutomatorRun:
             run.rows_needing_review += 1
         else:
             try:
-                _apply_product_to_sku_automator_line(line, match)
+                _apply_product_to_sku_automator_line(line, match, bp_rules=bp_rules)
                 run.rows_ready += 1
             except WorkflowError:
                 line.status = "needs_review"
@@ -345,6 +362,7 @@ def apply_sales_order_review_decisions(run_id: str, mapping: dict[str, int]) -> 
     if run is None:
         raise WorkflowError("This sales-order run could not be found.")
 
+    bp_rules = load_brand_partner_rules()
     for source_sku, product_id in mapping.items():
         product = db.session.get(Product, product_id)
         if product is None:
@@ -358,7 +376,7 @@ def apply_sales_order_review_decisions(run_id: str, mapping: dict[str, int]) -> 
             )
         )
         for line in lines:
-            _apply_product_to_sales_order_line(line, ProductMatch(product, "approved-alias"))
+            _apply_product_to_sales_order_line(line, ProductMatch(product, "approved-alias"), bp_rules=bp_rules)
 
     _refresh_sales_order_run(run)
     db.session.commit()
@@ -370,6 +388,7 @@ def apply_sku_automator_review_decisions(run_id: str, mapping: dict[str, int]) -
     if run is None:
         raise WorkflowError("This SKU Automator run could not be found.")
 
+    bp_rules = load_brand_partner_rules()
     for source_sku, product_id in mapping.items():
         product = db.session.get(Product, product_id)
         if product is None:
@@ -383,7 +402,7 @@ def apply_sku_automator_review_decisions(run_id: str, mapping: dict[str, int]) -
             )
         )
         for line in lines:
-            _apply_product_to_sku_automator_line(line, ProductMatch(product, "approved-alias"))
+            _apply_product_to_sku_automator_line(line, ProductMatch(product, "approved-alias"), bp_rules=bp_rules)
 
     _refresh_sku_automator_run(run)
     db.session.commit()
@@ -413,7 +432,7 @@ def export_sales_order_run_to_workbook(run_id: str) -> tuple[str, bytes]:
         sheet.append(
             [
                 _excel_date_value(line.invoice_date),
-                line.order_number,
+                line.prefixed_reference_no or line.raw_reference_no or line.order_number,
                 VOUCHER_TYPE_NAME,
                 line.retailer_name,
                 line.resolved_sku_name,
@@ -460,8 +479,9 @@ def build_sku_automator_matrix(run_id: str) -> tuple[list[str], list[SkuMatrixRo
                 total_quantity=Decimal("0"),
             )
         row = stores[store_key]
-        if line.order_reference_no and line.order_reference_no not in row.order_references:
-            row.order_references.append(line.order_reference_no)
+        display_reference = line.prefixed_reference_no or line.order_reference_no
+        if display_reference and display_reference not in row.order_references:
+            row.order_references.append(display_reference)
         quantity = line.resolved_quantity or Decimal("0")
         if line.resolved_sku_name:
             row.values_by_sku[line.resolved_sku_name] = (
@@ -501,7 +521,7 @@ def export_sku_automator_run_to_workbook(run_id: str) -> tuple[str, bytes]:
                 float(line.resolved_quantity or 0),
                 float(line.resolved_rate or 0),
                 float(line.source_value),
-                line.order_reference_no or "",
+                line.prefixed_reference_no or line.order_reference_no or "",
                 line.voucher_no or "",
             ]
         )
@@ -550,7 +570,12 @@ def _group_review_lines(lines: list[Any], line_type: str) -> list[ProductReviewG
     return groups
 
 
-def _apply_product_to_sales_order_line(line: SalesOrderLine, match: ProductMatch) -> None:
+def _apply_product_to_sales_order_line(
+    line: SalesOrderLine,
+    match: ProductMatch,
+    *,
+    bp_rules: list[Any] | None = None,
+) -> None:
     product = match.product
     _validate_sales_order_product(product)
     source_quantity = line.source_quantity or Decimal("0")
@@ -568,9 +593,24 @@ def _apply_product_to_sales_order_line(line: SalesOrderLine, match: ProductMatch
     line.resolved_rate = resolved_rate
     line.resolved_amount = resolved_amount
     line.resolved_vatable = bool(product.vatable)
+    classification = apply_invoice_classification_to_record(
+        line,
+        product=product,
+        store_name=line.retailer_name,
+        sku_name=product.sku_name,
+        raw_reference_no=line.raw_reference_no or line.order_number,
+        bp_rules=bp_rules,
+    )
+    line.prefixed_reference_no = classification.prefixed_reference_no
+    line.raw_reference_no = classification.raw_reference_no or line.raw_reference_no
 
 
-def _apply_product_to_sku_automator_line(line: SkuAutomatorLine, match: ProductMatch) -> None:
+def _apply_product_to_sku_automator_line(
+    line: SkuAutomatorLine,
+    match: ProductMatch,
+    *,
+    bp_rules: list[Any] | None = None,
+) -> None:
     product = match.product
     _validate_sku_automator_product(product)
     quantity = (line.source_value / product.price).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
@@ -581,6 +621,16 @@ def _apply_product_to_sku_automator_line(line: SkuAutomatorLine, match: ProductM
     line.resolved_sku_name = product.sku_name
     line.resolved_quantity = quantity
     line.resolved_rate = product.price
+    classification = apply_invoice_classification_to_record(
+        line,
+        product=product,
+        store_name=line.store_name,
+        sku_name=product.sku_name,
+        raw_reference_no=line.raw_reference_no or line.order_reference_no,
+        bp_rules=bp_rules,
+    )
+    line.prefixed_reference_no = classification.prefixed_reference_no
+    line.raw_reference_no = classification.raw_reference_no or line.raw_reference_no
 
 
 def _refresh_sales_order_run(run: SalesOrderRun) -> None:

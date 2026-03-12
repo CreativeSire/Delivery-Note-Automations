@@ -77,18 +77,20 @@
       </div>
       {% if summary.preview_lines %}
         <div class="data-table line-table">
-          <div class="table-line table-head-line">
+          <div class="table-line table-head-line table-line-sku-register-preview">
             <span>Store</span>
             <span>SKU</span>
+            <span>Category</span>
             <span>Qty</span>
             <span>Ref</span>
           </div>
           {% for line in summary.preview_lines %}
-            <div class="table-line">
+            <div class="table-line table-line-sku-register-preview">
               <span>{{ line.store_name }}</span>
               <span>{{ line.resolved_sku_name }}</span>
+              <span>{{ line.invoice_category or 'Pending' }}</span>
               <span>{{ line.resolved_quantity }}</span>
-              <span>{{ line.order_reference_no }}</span>
+              <span>{{ line.prefixed_reference_no or line.order_reference_no }}</span>
             </div>
           {% endfor %}
         </div>

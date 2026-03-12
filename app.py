@@ -51,7 +51,7 @@ from loading_tracker_services import (
     save_loading_tracker_row,
     serialize_loading_tracker_import_job,
 )
-from models import Product, ProductAlias, db
+from models import BrandPartnerRule, Product, ProductAlias, db, ensure_runtime_schema
 from services import (
     ServiceError,
     WorkbookShapeError,
@@ -64,8 +64,11 @@ from services import (
     export_ignored_history_to_xls,
     export_run_to_xls,
     import_uom_workbook,
+    list_brand_partner_rules,
     mark_source_sku_inactive,
     save_product_master_entry,
+    save_brand_partner_rule,
+    set_brand_partner_rule_active,
     set_product_active,
 )
 from workflow_services import (
@@ -109,6 +112,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     db.init_app(app)
     with app.app_context():
         db.create_all()
+        ensure_runtime_schema(db.engine)
         if not app.config.get("TESTING"):
             bootstrap_seed_uom_if_empty()
 
@@ -124,6 +128,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         search_query = request.args.get("q", "").strip()
         summary = build_dashboard_summary()
         correction_matches: list[ProductAlias] = []
+        brand_partner_rules = list_brand_partner_rules()
 
         active_query = db.session.query(Product).filter(Product.is_active.is_(True))
         inactive_query = db.session.query(Product).filter(Product.is_active.is_(False))
@@ -168,6 +173,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             active_products=active_products,
             inactive_products=inactive_products,
             correction_matches=correction_matches,
+            brand_partner_rules=brand_partner_rules,
             inactive_preview_limited=not search_query and summary.inactive_product_count > len(inactive_products),
             search_query=search_query,
             summary=summary,
@@ -472,6 +478,30 @@ def create_app(test_config: dict | None = None) -> Flask:
         flash(f"'{product.sku_name}' is active again.", "success")
         return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
 
+    @app.post("/bp-rules")
+    def create_brand_partner_rule() -> str:
+        search_query = request.form.get("q", "").strip()
+        try:
+            rule = save_brand_partner_rule(dict(request.form))
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
+
+        flash(f"Brand Partner rule saved for '{rule.sku_name_pattern}'.", "success")
+        return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
+
+    @app.post("/bp-rules/<int:rule_id>/deactivate")
+    def deactivate_brand_partner_rule(rule_id: int) -> str:
+        search_query = request.form.get("q", "").strip()
+        try:
+            rule = set_brand_partner_rule_active(rule_id, False)
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
+
+        flash(f"Brand Partner rule for '{rule.sku_name_pattern}' was removed.", "warning")
+        return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
+
     @app.post("/uom/import")
     def upload_uom() -> str:
         return_to = request.form.get("return_to", "").strip()
@@ -589,8 +619,9 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.get("/runs/<run_id>/download")
     def download_run(run_id: str):
+        invoice_category = request.args.get("category", "").strip() or None
         try:
-            filename, payload = export_run_to_xls(run_id)
+            filename, payload = export_run_to_xls(run_id, invoice_category=invoice_category)
         except WorkbookShapeError as exc:
             flash(str(exc), "error")
             return redirect(url_for("view_run", run_id=run_id))
