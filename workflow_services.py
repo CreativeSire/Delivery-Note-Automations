@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import csv
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -653,8 +654,21 @@ def _load_openpyxl_workbook(file_storage: Any, data_only: bool) -> Any:
 def _load_openpyxl_workbook_from_payload(payload: bytes, data_only: bool) -> Any:
     try:
         return load_workbook(BytesIO(payload), data_only=data_only)
-    except Exception as exc:  # pragma: no cover
-        raise WorkflowError("The uploaded workbook could not be opened.") from exc
+    except Exception:
+        pass
+
+    if xlrd is not None:
+        try:
+            legacy_workbook = xlrd.open_workbook(file_contents=payload)
+            return _convert_xlrd_workbook(legacy_workbook)
+        except Exception:
+            pass
+
+    delimited_rows = _load_delimited_rows(payload)
+    if delimited_rows:
+        return _workbook_from_rows(delimited_rows, SALES_ORDER_SOURCE_SHEET)
+
+    raise WorkflowError("The uploaded workbook could not be opened.")
 
 
 def _load_tabular_workbook(payload: bytes) -> tuple[str, list[list[Any]]]:
@@ -680,6 +694,63 @@ def _load_tabular_workbook(payload: bytes) -> tuple[str, list[list[Any]]]:
             sheet = workbook.sheet_by_index(0)
         rows = [sheet.row_values(index) for index in range(sheet.nrows)]
         return sheet.name, rows
+
+
+def _convert_xlrd_workbook(legacy_workbook: Any) -> Workbook:
+    workbook = Workbook()
+    default_sheet = workbook.active
+    workbook.remove(default_sheet)
+    for index in range(legacy_workbook.nsheets):
+        source_sheet = legacy_workbook.sheet_by_index(index)
+        target_sheet = workbook.create_sheet(source_sheet.name or f"Sheet{index + 1}")
+        for row_index in range(source_sheet.nrows):
+            target_sheet.append(source_sheet.row_values(row_index))
+    return workbook
+
+
+def _load_delimited_rows(payload: bytes) -> list[list[str]] | None:
+    text = _decode_delimited_payload(payload)
+    if text is None:
+        return None
+
+    sample_lines = [line for line in text.splitlines() if line.strip()]
+    if not sample_lines:
+        return None
+
+    sample = "\n".join(sample_lines[:8])
+    delimiter = "\t" if "\t" in sample else ","
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters="\t,;|")
+        delimiter = dialect.delimiter
+    except Exception:
+        pass
+
+    rows = [
+        [cell.strip() for cell in row]
+        for row in csv.reader(StringIO(text), delimiter=delimiter)
+        if any(cell.strip() for cell in row)
+    ]
+    return rows or None
+
+
+def _decode_delimited_payload(payload: bytes) -> str | None:
+    for encoding in ("utf-8-sig", "utf-16", "cp1252", "latin-1"):
+        try:
+            text = payload.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        if "\t" in text or "," in text:
+            return text
+    return None
+
+
+def _workbook_from_rows(rows: list[list[Any]], sheet_name: str) -> Workbook:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = sheet_name
+    for row in rows:
+        sheet.append(list(row))
+    return workbook
 
 
 def _is_tally_header_row(row: list[Any]) -> bool:
@@ -803,8 +874,25 @@ def _iso_date_value(value: Any) -> str:
     text = _string_value(value)
     if not text:
         return ""
-    if " " in text:
-        text = text.split(" ", 1)[0]
+    for candidate in (text, text.split(" ", 1)[0] if " " in text else text):
+        for date_format in (
+            "%Y-%m-%d",
+            "%Y-%m-%d %H:%M:%S",
+            "%d %b %Y",
+            "%d %B %Y",
+            "%d/%m/%Y",
+            "%d-%m-%Y",
+            "%d-%b-%Y",
+            "%d-%B-%Y",
+        ):
+            try:
+                return datetime.strptime(candidate, date_format).date().isoformat()
+            except ValueError:
+                continue
+        try:
+            return date.fromisoformat(candidate).isoformat()
+        except ValueError:
+            continue
     return text
 
 
