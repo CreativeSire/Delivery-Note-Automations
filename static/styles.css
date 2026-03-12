@@ -1919,6 +1919,12 @@ h3 {
   color: var(--teal);
 }
 
+.premium-main .panel-label,
+.premium-main .metric-label,
+.premium-main .field-label {
+  color: rgba(20, 52, 60, 0.68);
+}
+
 h1,
 h2,
 h3 {
