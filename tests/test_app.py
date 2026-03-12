@@ -2108,8 +2108,8 @@ def test_sales_order_run_generates_tally_ready_workbook() -> None:
         assert row2[6] == 100
         assert row2[7] == 200
         assert row2[9] == "VAT"
-        assert output["A2"].fill.fgColor.rgb == "00EAF5F7"
-        assert output["B2"].fill.fgColor.rgb == "FF1D6670"
+        assert output["A2"].fill.fgColor.rgb == "00E4F7F9"
+        assert output["B2"].fill.fgColor.rgb == "FF0A7787"
 
         assert row3[1] == "NV-17552476"
         assert row3[4] == "SKU Vanilla"
@@ -2117,8 +2117,8 @@ def test_sales_order_run_generates_tally_ready_workbook() -> None:
         assert row3[6] == 120
         assert row3[7] == 60
         assert row3[9] is None
-        assert output["A3"].fill.fgColor.rgb == "00EFF2F3"
-        assert output["B3"].fill.fgColor.rgb == "FF596970"
+        assert output["A3"].fill.fgColor.rgb == "00F7EEF4"
+        assert output["B3"].fill.fgColor.rgb == "FF8A5C78"
 
         with app.app_context():
             run = db.session.get(SalesOrderRun, run_id)
@@ -2194,20 +2194,20 @@ def test_sales_order_run_splits_same_reference_into_bp_vt_and_nv_lines() -> None
         assert row2[1] == "BP-17575653"
         assert row2[4] == "SKU Alpha"
         assert row2[9] == "VAT"
-        assert output["A2"].fill.fgColor.rgb == "00FFF5E7"
-        assert output["B2"].fill.fgColor.rgb == "FFCFA14B"
+        assert output["A2"].fill.fgColor.rgb == "00FFF5E3"
+        assert output["B2"].fill.fgColor.rgb == "FFC28A25"
 
         assert row3[1] == "VT-17575653"
         assert row3[4] == "SKU Beta"
         assert row3[9] == "VAT"
-        assert output["A3"].fill.fgColor.rgb == "00EAF5F7"
-        assert output["B3"].fill.fgColor.rgb == "FF1D6670"
+        assert output["A3"].fill.fgColor.rgb == "00E4F7F9"
+        assert output["B3"].fill.fgColor.rgb == "FF0A7787"
 
         assert row4[1] == "NV-17575653"
         assert row4[4] == "SKU Vanilla"
         assert row4[9] in ("", None)
-        assert output["A4"].fill.fgColor.rgb == "00EFF2F3"
-        assert output["B4"].fill.fgColor.rgb == "FF596970"
+        assert output["A4"].fill.fgColor.rgb == "00F7EEF4"
+        assert output["B4"].fill.fgColor.rgb == "FF8A5C78"
 
         with app.app_context():
             lines = db.session.query(SalesOrderLine).filter_by(run_id=run_id).order_by(SalesOrderLine.id.asc()).all()

@@ -66,9 +66,9 @@ VAT_LABEL = "VAT"
 VAT_RATE = Decimal("7.5")
 CASE_UNITS = {"case", "cases", "ctn", "carton", "cartons"}
 SALES_ORDER_CATEGORY_COLORS = {
-    "BP": {"row_fill": "FFF5E7", "key_fill": "FFCFA14B", "key_font": "FFFDF7"},
-    "VT": {"row_fill": "EAF5F7", "key_fill": "FF1D6670", "key_font": "FFFFFFFF"},
-    "NV": {"row_fill": "EFF2F3", "key_fill": "FF596970", "key_font": "FFFFFFFF"},
+    "BP": {"row_fill": "FFF5E3", "key_fill": "FFC28A25", "key_font": "FFFDF7"},
+    "VT": {"row_fill": "E4F7F9", "key_fill": "FF0A7787", "key_font": "FFFFFFFF"},
+    "NV": {"row_fill": "F7EEF4", "key_fill": "FF8A5C78", "key_font": "FFFFFFFF"},
 }
 
 
