@@ -131,20 +131,14 @@ def import_uom_workbook(file_storage: Any) -> UomImport:
     workbook = _try_load_workbook(payload)
     if workbook is not None:
         if UOM_SHEET not in workbook.sheetnames:
-            raise WorkbookShapeError(f"The workbook must contain a '{UOM_SHEET}' sheet.")
+            stock_rows = _extract_stock_category_summary_rows(workbook)
+            if stock_rows is not None:
+                return import_uom_rows(stock_rows, filename, mode="replace")
+            raise WorkbookShapeError(
+                f"The workbook must contain a '{UOM_SHEET}' sheet or a recognized 'Stock Category Summary' sheet."
+            )
 
-        sheet = workbook[UOM_SHEET]
-        rows = [
-            [
-                sheet.cell(row_index, 1).value,
-                sheet.cell(row_index, 2).value,
-                sheet.cell(row_index, 3).value,
-                sheet.cell(row_index, 4).value,
-                sheet.cell(row_index, 5).value,
-                sheet.cell(row_index, 6).value,
-            ]
-            for row_index in range(2, sheet.max_row + 1)
-        ]
+        rows = _extract_uom_sheet_rows(workbook[UOM_SHEET])
         return import_uom_rows(rows, filename, mode="replace")
 
     item_rows = _extract_item_list_rows(payload)
@@ -152,7 +146,7 @@ def import_uom_workbook(file_storage: Any) -> UomImport:
         return import_uom_rows(item_rows, filename, mode="merge")
 
     raise WorkbookShapeError(
-        "The uploaded file must be either a UOM workbook or an item list export."
+        "The uploaded file must be a UOM workbook, a Stock Category Summary workbook, or an item list export."
     )
 
 
@@ -840,6 +834,57 @@ def _try_load_workbook(payload: bytes):
         return None
 
 
+def _extract_uom_sheet_rows(sheet: Any) -> list[list[Any]]:
+    return [
+        [
+            sheet.cell(row_index, 1).value,
+            sheet.cell(row_index, 2).value,
+            sheet.cell(row_index, 3).value,
+            sheet.cell(row_index, 4).value,
+            sheet.cell(row_index, 5).value,
+            sheet.cell(row_index, 6).value,
+        ]
+        for row_index in range(2, sheet.max_row + 1)
+    ]
+
+
+def _extract_stock_category_summary_rows(workbook: Any) -> list[list[Any]] | None:
+    required_headers = {"sku", "quantity", "(alt. units)", "rate"}
+    existing_products = list(db.session.scalars(select(Product)))
+    by_exact_name = {product.sku_name: product for product in existing_products}
+    by_normalized_name = {product.normalized_name: product for product in existing_products}
+
+    for sheet in workbook.worksheets:
+        headers = [_normalize_header(sheet.cell(1, column_index).value) for column_index in range(1, sheet.max_column + 1)]
+        if not required_headers.issubset(set(headers)):
+            continue
+
+        header_map = {header: index + 1 for index, header in enumerate(headers) if header}
+        rows: list[list[Any]] = []
+        for row_index in range(2, sheet.max_row + 1):
+            sku_name = _string_value(sheet.cell(row_index, header_map["sku"]).value)
+            if not sku_name:
+                continue
+
+            uom = _string_value(sheet.cell(row_index, header_map["quantity"]).value) or "ctn"
+            alt_uom = _string_value(sheet.cell(row_index, header_map["(alt. units)"]).value) or "unt"
+            price = _decimal_value(sheet.cell(row_index, header_map["rate"]).value)
+            if price is None:
+                continue
+
+            existing_product = by_exact_name.get(sku_name) or by_normalized_name.get(normalize_sku(sku_name))
+            conversion = _extract_pack_conversion(sku_name)
+            if conversion is None and existing_product is not None:
+                conversion = existing_product.conversion
+            vatable = "Yes" if existing_product and existing_product.vatable else "No"
+
+            rows.append([sku_name, uom, alt_uom, conversion, vatable, price, True])
+
+        return rows or None
+
+    return None
+
+
 def _extract_item_list_rows(payload: bytes) -> list[list[Any]] | None:
     text = _decode_text_payload(payload)
     if text is None:
@@ -891,6 +936,13 @@ def _decode_text_payload(payload: bytes) -> str | None:
         except UnicodeDecodeError:
             continue
     return None
+
+
+def _extract_pack_conversion(sku_name: str) -> Decimal | None:
+    match = re.search(r"\((\d+(?:\.\d+)?)\s*[xX]\)", sku_name)
+    if match is None:
+        return None
+    return _decimal_value(match.group(1))
 
 
 def _normalize_header(value: Any) -> str:
