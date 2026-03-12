@@ -938,6 +938,39 @@ h2 {
   gap: 14px;
 }
 
+.database-search-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  margin: 18px 0 10px;
+}
+
+.database-search-field {
+  flex: 1 1 360px;
+  display: grid;
+  gap: 8px;
+}
+
+.database-search-field input {
+  min-height: 52px;
+  padding: 0 16px;
+  border: 1px solid rgba(20, 51, 59, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--brand-dark);
+  font: inherit;
+}
+
+.database-search-copy {
+  margin: 0 0 16px;
+  color: var(--text-soft);
+}
+
+.secondary-button-ghost {
+  background: rgba(255, 255, 255, 0.68);
+}
+
 .inactive-products-panel {
   margin-top: 18px;
 }
@@ -1012,6 +1045,10 @@ h2 {
 
 .table-line-restore {
   grid-template-columns: minmax(0, 2.2fr) 110px 90px;
+}
+
+.table-line-alias {
+  grid-template-columns: minmax(0, 1.8fr) minmax(0, 1.8fr) 140px;
 }
 
 .table-line-run {

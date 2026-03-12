@@ -9,6 +9,7 @@ from io import BytesIO
 from pathlib import Path
 
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, send_file, url_for
+from sqlalchemy import or_
 from werkzeug.utils import secure_filename
 
 from loading_tracker_services import (
@@ -50,7 +51,7 @@ from loading_tracker_services import (
     save_loading_tracker_row,
     serialize_loading_tracker_import_job,
 )
-from models import Product, db
+from models import Product, ProductAlias, db
 from services import (
     ServiceError,
     WorkbookShapeError,
@@ -118,6 +119,60 @@ def create_app(test_config: dict | None = None) -> Flask:
             "loading_summary": build_loading_tracker_summary(),
             "loading_template_summary": build_loading_tracker_template_summary(),
         }
+
+    def render_product_master(product_to_edit: Product | None = None) -> str:
+        search_query = request.args.get("q", "").strip()
+        summary = build_dashboard_summary()
+        correction_matches: list[ProductAlias] = []
+
+        active_query = db.session.query(Product).filter(Product.is_active.is_(True))
+        inactive_query = db.session.query(Product).filter(Product.is_active.is_(False))
+
+        if search_query:
+            like_query = f"%{search_query}%"
+            alias_product_ids = db.session.query(ProductAlias.product_id).filter(
+                or_(
+                    ProductAlias.alias_name.ilike(like_query),
+                    ProductAlias.normalized_name.ilike(like_query),
+                )
+            )
+            product_filter = or_(
+                Product.sku_name.ilike(like_query),
+                Product.normalized_name.ilike(like_query),
+                Product.uom.ilike(like_query),
+                Product.alt_uom.ilike(like_query),
+                Product.id.in_(alias_product_ids),
+            )
+            active_products = list(active_query.filter(product_filter).order_by(Product.sku_name.asc()))
+            inactive_products = list(inactive_query.filter(product_filter).order_by(Product.sku_name.asc()))
+            correction_matches = list(
+                db.session.query(ProductAlias)
+                .join(Product)
+                .filter(
+                    or_(
+                        ProductAlias.alias_name.ilike(like_query),
+                        ProductAlias.normalized_name.ilike(like_query),
+                        Product.sku_name.ilike(like_query),
+                        Product.normalized_name.ilike(like_query),
+                    )
+                )
+                .order_by(ProductAlias.alias_name.asc())
+                .limit(60)
+            )
+        else:
+            active_products = list(active_query.order_by(Product.sku_name.asc()))
+            inactive_products = list(inactive_query.order_by(Product.sku_name.asc()).limit(20))
+
+        return render_template(
+            "product_master.html",
+            active_products=active_products,
+            inactive_products=inactive_products,
+            correction_matches=correction_matches,
+            inactive_preview_limited=not search_query and summary.inactive_product_count > len(inactive_products),
+            search_query=search_query,
+            summary=summary,
+            product_to_edit=product_to_edit,
+        )
 
     @app.get("/")
     def index() -> str:
@@ -355,31 +410,19 @@ def create_app(test_config: dict | None = None) -> Flask:
     @app.get("/database")
     @app.get("/products")
     def product_master() -> str:
-        active_products = list(
-            db.session.query(Product).filter(Product.is_active.is_(True)).order_by(Product.sku_name.asc())
-        )
-        inactive_products = list(
-            db.session.query(Product).filter(Product.is_active.is_(False)).order_by(Product.sku_name.asc()).limit(20)
-        )
-        summary = build_dashboard_summary()
-        return render_template(
-            "product_master.html",
-            active_products=active_products,
-            inactive_products=inactive_products,
-            summary=summary,
-            product_to_edit=None,
-        )
+        return render_product_master()
 
     @app.post("/products")
     def create_product() -> str:
+        search_query = request.form.get("q", "").strip()
         try:
             product = save_product_master_entry(dict(request.form))
         except ServiceError as exc:
             flash(str(exc), "error")
-            return redirect(url_for("product_master"))
+            return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
 
         flash(f"'{product.sku_name}' was added to the product master.", "success")
-        return redirect(url_for("product_master"))
+        return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
 
     @app.get("/products/<int:product_id>/edit")
     def edit_product(product_id: int) -> str:
@@ -387,53 +430,47 @@ def create_app(test_config: dict | None = None) -> Flask:
         if product is None:
             abort(404)
 
-        active_products = list(
-            db.session.query(Product).filter(Product.is_active.is_(True)).order_by(Product.sku_name.asc())
-        )
-        inactive_products = list(
-            db.session.query(Product).filter(Product.is_active.is_(False)).order_by(Product.sku_name.asc()).limit(20)
-        )
-        summary = build_dashboard_summary()
-        return render_template(
-            "product_master.html",
-            active_products=active_products,
-            inactive_products=inactive_products,
-            summary=summary,
-            product_to_edit=product,
-        )
+        return render_product_master(product_to_edit=product)
 
     @app.post("/products/<int:product_id>/edit")
     def update_product(product_id: int) -> str:
+        search_query = request.form.get("q", "").strip()
         try:
             product = save_product_master_entry(dict(request.form), product_id=product_id)
         except ServiceError as exc:
             flash(str(exc), "error")
-            return redirect(url_for("edit_product", product_id=product_id))
+            return redirect(
+                url_for("edit_product", product_id=product_id, q=search_query)
+                if search_query
+                else url_for("edit_product", product_id=product_id)
+            )
 
         flash(f"'{product.sku_name}' was updated.", "success")
-        return redirect(url_for("product_master"))
+        return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
 
     @app.post("/products/<int:product_id>/deactivate")
     def deactivate_product(product_id: int) -> str:
+        search_query = request.form.get("q", "").strip()
         try:
             product = set_product_active(product_id, False)
         except ServiceError as exc:
             flash(str(exc), "error")
-            return redirect(url_for("product_master"))
+            return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
 
         flash(f"'{product.sku_name}' was removed from the active product master.", "warning")
-        return redirect(url_for("product_master"))
+        return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
 
     @app.post("/products/<int:product_id>/activate")
     def activate_product(product_id: int) -> str:
+        search_query = request.form.get("q", "").strip()
         try:
             product = set_product_active(product_id, True)
         except ServiceError as exc:
             flash(str(exc), "error")
-            return redirect(url_for("product_master"))
+            return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
 
         flash(f"'{product.sku_name}' is active again.", "success")
-        return redirect(url_for("product_master"))
+        return redirect(url_for("product_master", q=search_query) if search_query else url_for("product_master"))
 
     @app.post("/uom/import")
     def upload_uom() -> str:

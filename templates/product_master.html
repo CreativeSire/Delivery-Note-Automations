@@ -45,10 +45,30 @@
       </div>
 
       <div class="database-toolbar">
-        <span class="database-toolbar-pill">Active {{ active_products|length }}</span>
-        <span class="database-toolbar-pill">Inactive {{ inactive_products|length }}</span>
-        <span class="database-toolbar-pill">Corrections {{ summary.alias_count }}</span>
+        <span class="database-toolbar-pill">{% if search_query %}Active matches {{ active_products|length }}{% else %}Active {{ active_products|length }}{% endif %}</span>
+        <span class="database-toolbar-pill">{% if search_query %}Inactive matches {{ inactive_products|length }}{% else %}Inactive {{ summary.inactive_product_count }}{% endif %}</span>
+        <span class="database-toolbar-pill">{% if search_query %}Correction matches {{ correction_matches|length }}{% else %}Corrections {{ summary.alias_count }}{% endif %}</span>
       </div>
+
+      <form class="database-search-form" action="{{ url_for('product_master') }}" method="get">
+        <label class="database-search-field" for="product-search">
+          <span class="field-label">Global product search</span>
+          <input
+            id="product-search"
+            name="q"
+            type="search"
+            value="{{ search_query }}"
+            placeholder="Search active, removed, or correction names"
+          >
+        </label>
+        <button class="secondary-button" type="submit">Search</button>
+        {% if search_query %}
+          <a class="secondary-button secondary-button-ghost" href="{{ url_for('product_master') }}">Clear</a>
+        {% endif %}
+      </form>
+      <p class="database-search-copy">
+        Searches the live catalog, removed products, and correction aliases together.
+      </p>
 
       {% if active_products %}
         <div class="data-table scroll-table database-table">
@@ -81,8 +101,9 @@
               <span>{{ product.uom or '-' }}{% if product.conversion %} · {{ product.conversion }}{% endif %}</span>
               <span>{{ product.updated_at.strftime('%d %b %Y') }}</span>
               <span class="row-actions admin-actions">
-                <a class="text-button" href="{{ url_for('edit_product', product_id=product.id) }}">Edit</a>
+                <a class="text-button" href="{{ url_for('edit_product', product_id=product.id, q=search_query) if search_query else url_for('edit_product', product_id=product.id) }}">Edit</a>
                 <form action="{{ url_for('deactivate_product', product_id=product.id) }}" method="post">
+                  <input type="hidden" name="q" value="{{ search_query }}">
                   <button class="text-button danger" type="submit">Remove</button>
                 </form>
               </span>
@@ -128,6 +149,7 @@
       <p class="page-copy database-form-copy">Use this side panel for one-off manual fixes, special products, or updates that should stay in the live database.</p>
 
       <form class="form-stack" action="{% if product_to_edit %}{{ url_for('update_product', product_id=product_to_edit.id) }}{% else %}{{ url_for('create_product') }}{% endif %}" method="post">
+        <input type="hidden" name="q" value="{{ search_query }}">
         <label class="field">
           <span class="field-label">Product name</span>
           <input name="sku_name" type="text" value="{{ product_to_edit.sku_name if product_to_edit else '' }}" required>
@@ -166,12 +188,42 @@
         <div class="actions">
           <button class="primary-button" type="submit">{% if product_to_edit %}Save changes{% else %}Add product{% endif %}</button>
           {% if product_to_edit %}
-            <a class="secondary-button" href="{{ url_for('product_master') }}">Cancel</a>
+            <a class="secondary-button" href="{{ url_for('product_master', q=search_query) if search_query else url_for('product_master') }}">Cancel</a>
           {% endif %}
         </div>
       </form>
     </article>
   </section>
+
+  {% if search_query %}
+    <section class="panel soft-panel inactive-products-panel">
+      <div class="panel-head compact">
+        <div>
+          <p class="eyebrow">Corrections</p>
+          <h2>Matching aliases</h2>
+        </div>
+      </div>
+
+      {% if correction_matches %}
+        <div class="data-table line-table">
+          <div class="table-line table-head-line table-line-alias admin-table-head">
+            <span>Alias</span>
+            <span>Maps to</span>
+            <span>Method</span>
+          </div>
+          {% for alias in correction_matches %}
+            <div class="table-line table-line-alias admin-table-row">
+              <span>{{ alias.alias_name }}</span>
+              <span>{{ alias.product.sku_name }}</span>
+              <span>{{ alias.match_method.replace('-', ' ')|title }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">No correction aliases match this search yet.</p>
+      {% endif %}
+    </section>
+  {% endif %}
 
   <section class="panel soft-panel inactive-products-panel">
     <div class="panel-head compact">
@@ -194,14 +246,18 @@
             <span>{{ '{:,.2f}'.format(product.price) if product.price is not none else 'Missing' }}</span>
             <span>
               <form action="{{ url_for('activate_product', product_id=product.id) }}" method="post">
+                <input type="hidden" name="q" value="{{ search_query }}">
                 <button class="text-button" type="submit">Restore</button>
               </form>
             </span>
           </div>
         {% endfor %}
       </div>
+      {% if inactive_preview_limited %}
+        <p class="database-search-copy">Showing the first {{ inactive_products|length }} removed products. Use search to find any inactive item.</p>
+      {% endif %}
     {% else %}
-      <p class="empty-state">No inactive products.</p>
+      <p class="empty-state">{% if search_query %}No removed products match this search.{% else %}No inactive products.{% endif %}</p>
     {% endif %}
   </section>
 {% endblock %}

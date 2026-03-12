@@ -691,6 +691,76 @@ def test_product_master_can_add_edit_deactivate_and_restore() -> None:
             db.engine.dispose()
 
 
+def test_product_master_global_search_finds_active_inactive_and_alias_matches() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        with app.app_context():
+            active = Product(
+                sku_name="Golden Palm Oil",
+                normalized_name="golden palm oil",
+                uom="ctn",
+                alt_uom="btt",
+                conversion=6,
+                price=24500,
+                vatable=False,
+                is_active=True,
+            )
+            inactive = Product(
+                sku_name="Legacy Palm Oil",
+                normalized_name="legacy palm oil",
+                uom="ctn",
+                alt_uom="btt",
+                conversion=6,
+                price=19800,
+                vatable=False,
+                is_active=False,
+            )
+            other = Product(
+                sku_name="Neutral Flour",
+                normalized_name="neutral flour",
+                uom="pck",
+                alt_uom="scht",
+                conversion=12,
+                price=8700,
+                vatable=False,
+                is_active=True,
+            )
+            db.session.add_all([active, inactive, other])
+            db.session.flush()
+            db.session.add(
+                ProductAlias(
+                    alias_name="Old Palm Blend",
+                    normalized_name="old palm blend",
+                    match_method="approved-alias",
+                    product_id=active.id,
+                )
+            )
+            db.session.commit()
+
+        client = app.test_client()
+        response = client.get("/products?q=palm")
+        html = response.get_data(as_text=True)
+
+        assert response.status_code == 200
+        assert "Golden Palm Oil" in html
+        assert "Legacy Palm Oil" in html
+        assert "Old Palm Blend" in html
+        assert "Matching aliases" in html
+        assert 'value="palm"' in html
+        assert "Neutral Flour" not in html
+
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
 def test_product_master_page_exposes_uom_import_and_redirects_back() -> None:
     with TemporaryDirectory() as temp_dir:
         app = create_app(
