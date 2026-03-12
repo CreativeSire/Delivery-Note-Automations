@@ -2638,6 +2638,76 @@ h3 {
   letter-spacing: 0.06em;
 }
 
+.delivery-run-layout {
+  margin-top: 18px;
+}
+
+.delivery-run-hero {
+  min-height: 0;
+}
+
+.delivery-run-meters {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.delivery-run-actions-card,
+.delivery-run-queue {
+  display: grid;
+  gap: 18px;
+}
+
+.delivery-category-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.delivery-category-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 24px;
+  background: rgba(20, 52, 60, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(20, 52, 60, 0.05);
+}
+
+.delivery-category-card-muted {
+  background: rgba(20, 52, 60, 0.03);
+}
+
+.delivery-category-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.delivery-category-head strong {
+  font-size: clamp(1.7rem, 2.8vw, 2.4rem);
+  line-height: 1;
+  color: var(--ink);
+}
+
+.delivery-category-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.delivery-card-placeholder {
+  width: 100%;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.delivery-run-empty {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(20, 52, 60, 0.04);
+}
+
 .tracker-day-nav {
   display: flex;
   flex-wrap: wrap;
@@ -2822,6 +2892,8 @@ h3 {
   .sidebar-stat-grid,
   .future-grid,
   .pipeline-strip,
+  .delivery-run-meters,
+  .delivery-category-grid,
   .field-row,
   .bulk-action-grid,
   .bulk-action-grid-compact,

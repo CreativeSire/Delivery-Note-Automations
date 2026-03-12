@@ -3,51 +3,98 @@
 {% block title %}Delivery Note Run {{ summary.run.id }} | DALA OPERATIONS{% endblock %}
 
 {% block content %}
-  <section class="page-header">
+  <section class="hero-band">
     <div>
-      <p class="eyebrow">Run</p>
+      <p class="eyebrow">Delivery Note Run</p>
       <h1>{{ summary.run.original_filename }}</h1>
+      <p class="page-copy">Use this run as the final dispatch split. Download only the invoice buckets that carry live rows, keep the review queue clean, and avoid mixing compliance paths inside one upload.</p>
     </div>
-    <div class="header-stats">
-      <div><span>Status</span><strong>{{ summary.run.status.replace('_', ' ') }}</strong></div>
-      <div><span>Invoice date</span><strong>{{ summary.run.invoice_date }}</strong></div>
-      <div><span>Ready</span><strong>{{ summary.ready_lines }}</strong></div>
-      <div><span>Review</span><strong>{{ summary.run.rows_needing_review }}</strong></div>
-      <div><span>Ignored</span><strong>{{ summary.ignored_lines }}</strong></div>
-    </div>
+    <span class="hero-chip">{{ summary.run.status.replace('_', ' ') }}</span>
   </section>
 
-  <section class="panel">
-    <div class="actions">
-      {% if summary.run.rows_needing_review > 0 %}
-        <a class="primary-button" href="{{ url_for('review_run', run_id=summary.run.id) }}">Review unresolved SKUs</a>
-      {% else %}
-        {% if summary.category_counts['BP'] %}
-          <a class="primary-button invoice-button invoice-button-bp" href="{{ url_for('download_run', run_id=summary.run.id, category='BP') }}">Download BP</a>
-        {% endif %}
-        {% if summary.category_counts['VT'] %}
-          <a class="primary-button invoice-button invoice-button-vt" href="{{ url_for('download_run', run_id=summary.run.id, category='VT') }}">Download VT</a>
-        {% endif %}
-        {% if summary.category_counts['NV'] %}
-          <a class="primary-button invoice-button invoice-button-nv" href="{{ url_for('download_run', run_id=summary.run.id, category='NV') }}">Download NV</a>
-        {% endif %}
-      {% endif %}
-      {% if summary.ignored_groups %}
-        <a class="secondary-button" href="{{ url_for('download_ignored_history', run_id=summary.run.id) }}">Download Ignored Items</a>
-      {% endif %}
-      <a class="secondary-button" href="{{ url_for('delivery_note_home') }}">Back to Delivery Note</a>
-    </div>
-    {% if summary.run.rows_needing_review == 0 %}
-      <div class="database-toolbar">
-        <span class="database-toolbar-pill invoice-pill invoice-pill-bp">BP {{ summary.category_counts['BP'] }}</span>
-        <span class="database-toolbar-pill invoice-pill invoice-pill-vt">VT {{ summary.category_counts['VT'] }}</span>
-        <span class="database-toolbar-pill invoice-pill invoice-pill-nv">NV {{ summary.category_counts['NV'] }}</span>
+  <section class="content-split content-split-hero delivery-run-layout">
+    <article class="glass-card module-hero module-hero-primary delivery-run-hero">
+      <div>
+        <p class="eyebrow">Dispatch split</p>
+        <h2>{{ summary.run.invoice_date }}</h2>
+        <p class="module-copy">This run is already separated into Brand Partner, VAT, and Non-VAT buckets. Keep the accounting path clean by downloading only the category you need for posting.</p>
       </div>
-    {% endif %}
+      <div class="module-meta-grid delivery-run-meters">
+        <div class="meter">
+          <span class="metric-label">Ready lines</span>
+          <strong>{{ summary.ready_lines }}</strong>
+        </div>
+        <div class="meter">
+          <span class="metric-label">Review queue</span>
+          <strong>{{ summary.run.rows_needing_review }}</strong>
+        </div>
+        <div class="meter">
+          <span class="metric-label">Ignored rows</span>
+          <strong>{{ summary.ignored_lines }}</strong>
+        </div>
+      </div>
+      <div class="chip-row">
+        <span class="invoice-pill invoice-pill-bp">BP {{ summary.category_counts['BP'] }}</span>
+        <span class="invoice-pill invoice-pill-vt">VT {{ summary.category_counts['VT'] }}</span>
+        <span class="invoice-pill invoice-pill-nv">NV {{ summary.category_counts['NV'] }}</span>
+      </div>
+    </article>
+
+    <article class="glass-card delivery-run-actions-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Downloads</p>
+          <h2>Next action</h2>
+        </div>
+      </div>
+
+      {% if summary.run.rows_needing_review > 0 %}
+        <div class="delivery-run-empty">
+          <span class="mini-chip">Resolve first</span>
+          <h3>Some SKUs still need review.</h3>
+          <p class="empty-state">Finish the review queue before the run can be downloaded in clean invoice buckets.</p>
+        </div>
+        <div class="actions">
+          <a class="primary-button" href="{{ url_for('review_run', run_id=summary.run.id) }}">Review unresolved SKUs</a>
+          <a class="secondary-button" href="{{ url_for('delivery_note_home') }}">Back to Delivery Note</a>
+        </div>
+      {% else %}
+        {% set category_cards = [
+          ('BP', 'Brand Partner', 'Inventory-linked partner lines that should stay separated from normal invoice posting.', 'invoice-pill-bp', 'invoice-button-bp'),
+          ('VT', 'VAT', 'Rows that should move with VAT enabled and remain grouped in the VAT delivery note flow.', 'invoice-pill-vt', 'invoice-button-vt'),
+          ('NV', 'Non-VAT', 'Rows that must stay outside the VAT invoice path while preserving the same run reference.', 'invoice-pill-nv', 'invoice-button-nv'),
+        ] %}
+        <div class="delivery-category-grid">
+          {% for code, title, copy, pill_class, button_class in category_cards %}
+            <section class="delivery-category-card {% if not summary.category_counts[code] %}delivery-category-card-muted{% endif %}">
+              <div class="delivery-category-head">
+                <span class="invoice-pill {{ pill_class }}">{{ code }}</span>
+                <strong>{{ summary.category_counts[code] }}</strong>
+              </div>
+              <div class="delivery-category-copy">
+                <h3>{{ title }}</h3>
+                <p class="empty-state">{{ copy }}</p>
+              </div>
+              {% if summary.category_counts[code] %}
+                <a class="primary-button invoice-button {{ button_class }}" href="{{ url_for('download_run', run_id=summary.run.id, category=code) }}">Download {{ code }}</a>
+              {% else %}
+                <span class="secondary-button delivery-card-placeholder">No rows in this run</span>
+              {% endif %}
+            </section>
+          {% endfor %}
+        </div>
+        <div class="actions">
+          {% if summary.ignored_groups %}
+            <a class="secondary-button" href="{{ url_for('download_ignored_history', run_id=summary.run.id) }}">Download Ignored Items</a>
+          {% endif %}
+          <a class="secondary-button" href="{{ url_for('delivery_note_home') }}">Back to Delivery Note</a>
+        </div>
+      {% endif %}
+    </article>
   </section>
 
-  <section class="panel">
-    <div class="panel-head compact">
+  <section class="glass-card delivery-run-queue">
+    <div class="module-head compact">
       <div>
         <p class="eyebrow">Review queue</p>
         <h2>Unresolved SKUs</h2>
@@ -69,13 +116,17 @@
         {% endfor %}
       </div>
     {% else %}
-      <p class="empty-state">Everything active is matched and ready.{% if summary.ignored_lines %} {{ summary.ignored_lines }} line(s) were ignored because they belong to inactive products.{% endif %}</p>
+      <div class="delivery-run-empty">
+        <span class="mini-chip">Clear queue</span>
+        <h3>Everything active is matched and ready.</h3>
+        <p class="empty-state">Nothing is waiting for SKU review.{% if summary.ignored_lines %} {{ summary.ignored_lines }} line(s) were skipped because they belong to inactive products.{% endif %}</p>
+      </div>
     {% endif %}
   </section>
 
   {% if summary.ignored_groups %}
-    <section class="panel">
-      <div class="panel-head compact">
+    <section class="glass-card">
+      <div class="module-head compact">
         <div>
           <p class="eyebrow">Ignored</p>
           <h2>Inactive items skipped</h2>
