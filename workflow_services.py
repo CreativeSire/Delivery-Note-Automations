@@ -408,6 +408,7 @@ def export_sales_order_run_to_workbook(run_id: str) -> tuple[str, bytes]:
     sheet = workbook.active
     sheet.title = SALES_ORDER_OUTPUT_SHEET
     _write_styled_header(sheet, SALES_ORDER_HEADERS)
+    sheet.column_dimensions["A"].width = max(sheet.column_dimensions["A"].width or 0, 16)
     for line in lines:
         sheet.append(
             [
@@ -425,6 +426,9 @@ def export_sales_order_run_to_workbook(run_id: str) -> tuple[str, bytes]:
                 float(_vat_amount(line.resolved_amount or Decimal("0"))) if line.resolved_vatable else "",
             ]
         )
+        date_cell = sheet.cell(sheet.max_row, 1)
+        if isinstance(date_cell.value, datetime):
+            date_cell.number_format = "yyyy-mm-dd"
     payload = _save_workbook(workbook)
     run.status = "exported"
     run.exported_at = datetime.now(UTC)

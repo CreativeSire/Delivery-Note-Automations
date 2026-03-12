@@ -1959,7 +1959,7 @@ def test_sales_order_run_accepts_tab_delimited_pepup_export_with_xls_extension()
 
         download = client.get(f"/sales-order/runs/{run_id}/download")
         assert download.status_code == 200
-        workbook = load_workbook(BytesIO(download.data), data_only=True)
+        workbook = load_workbook(BytesIO(download.data))
         output = workbook["Sales Order"]
         row2 = [output.cell(2, c).value for c in range(1, 13)]
         row3 = [output.cell(3, c).value for c in range(1, 13)]
@@ -1970,6 +1970,8 @@ def test_sales_order_run_accepts_tab_delimited_pepup_export_with_xls_extension()
         assert row2[5] == "2ctn"
         assert row2[6] == 93.02
         assert row2[7] == 186.04
+        assert output["A2"].number_format == "yyyy-mm-dd"
+        assert output.column_dimensions["A"].width >= 16
 
         assert row3[0].date().isoformat() == "2026-03-12"
         assert row3[1] == "17575278"
