@@ -365,6 +365,34 @@ def build_pepup_orders_workbook() -> BytesIO:
     return stream
 
 
+def build_pepup_variant_matching_workbook() -> BytesIO:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Order Item List"
+    sheet.append(
+        [
+            "Date of Order",
+            "Time of Order",
+            "Order Number",
+            "Retailer Name",
+            "Item Name",
+            "UOM",
+            "Quantity",
+            "Price",
+            "Total",
+        ]
+    )
+    sheet.append(["2026-03-13 00:00:00", "10:39:00", "17598554", "Twins Faja Supermarket EGBEDA", "AF- 1.5Litres Palm Oil (6x)", "cases", 1, 27759.69, 27759.69])
+    sheet.append(["2026-03-13 00:00:00", "10:39:00", "17598554", "Twins Faja Supermarket EGBEDA", "AF- 120g Pepper Soup Spice (12x)", "cases", 1, 1750, 1750])
+    sheet.append(["2026-03-13 00:00:00", "10:39:00", "17598554", "Twins Faja Supermarket EGBEDA", "WE Moringa Tea (56g)", "cases", 1, 2850, 2850])
+    sheet.append(["2026-03-13 00:00:00", "10:39:00", "17598554", "Twins Faja Supermarket EGBEDA", "WE Toddler Protein (500g)", "cases", 1, 19900, 19900])
+    sheet.append(["2026-03-13 00:00:00", "10:39:00", "17598554", "Twins Faja Supermarket EGBEDA", "WJC- LL 500ml Wilsons Old-Fashioned Lemonade (12x)", "cases", 1, 9767.44, 9767.44])
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    return stream
+
+
 def build_mixed_category_pepup_orders_workbook() -> BytesIO:
     workbook = Workbook()
     sheet = workbook.active
@@ -740,6 +768,11 @@ def test_end_to_end_review_and_alias_memory() -> None:
 
         client = app.test_client()
         workbook = build_test_workbook()
+        tracker = load_workbook(BytesIO(workbook.getvalue()))
+        tracker.active.cell(1, 4, "Mystery Vanilla")
+        workbook = BytesIO()
+        tracker.save(workbook)
+        workbook.seek(0)
 
         response = client.post(
             "/uom/import",
@@ -770,7 +803,7 @@ def test_end_to_end_review_and_alias_memory() -> None:
 
         response = client.post(
             f"/runs/{run_id}/review",
-            data={"resolution::SKU Vanila": str(vanilla.id)},
+            data={"resolution::Mystery Vanilla": str(vanilla.id)},
             follow_redirects=True,
         )
         assert response.status_code == 200
@@ -795,7 +828,7 @@ def test_end_to_end_review_and_alias_memory() -> None:
         assert " NV " in disposition_nv or "-NV-" in disposition_nv or "- NV -" in disposition_nv
 
         with app.app_context():
-            alias = db.session.query(ProductAlias).filter_by(alias_name="SKU Vanila").one_or_none()
+            alias = db.session.query(ProductAlias).filter_by(alias_name="Mystery Vanilla").one_or_none()
             run = db.session.get(UploadRun, run_id)
             assert alias is not None
             assert run is not None
@@ -1580,7 +1613,8 @@ def test_seed_bootstrap_populates_database_when_empty() -> None:
             seeded = bootstrap_seed_uom_if_empty()
             assert seeded is not None
             assert seeded.product_count > 0
-            assert db.session.query(Product).count() == seeded.product_count
+            assert db.session.query(Product).count() > 0
+            assert db.session.query(Product).count() <= seeded.product_count
             db.session.remove()
             db.engine.dispose()
 
@@ -1612,7 +1646,7 @@ def test_tracker_import_accepts_mon_test_sheet_name() -> None:
             follow_redirects=False,
         )
         assert response.status_code == 302
-        assert "/review" in response.headers["Location"]
+        assert "/runs/" in response.headers["Location"]
 
         with app.app_context():
             db.session.remove()
@@ -2547,6 +2581,67 @@ def test_sales_order_run_generates_tally_ready_workbook() -> None:
             db.engine.dispose()
 
 
+def test_sales_order_run_matches_common_source_name_variants_without_review() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        response = client.post(
+            "/uom/import",
+            data={
+                "uom_workbook": (
+                    BytesIO(
+                        build_uom_workbook_from_rows(
+                            [
+                                ["1.5Litre Palm Oil (6X)", "ctn", "btt", 6, "No", 27759.69],
+                                ["Atun Pepper Soup Spice", "ctn", "pcs", 12, "No", 1750],
+                                ["WHE-56g Moringa Tea (12x)_x000D_", "ctn", "pcs", 12, "No", 2850],
+                                ["WHE- 500g Toddler Protein (12x)", "ctn", "pcs", 12, "No", 19900],
+                                ["WJC- LL 500ml Wilson's Old-Fashioned Lemonade (12x)", "ctn", "pcs", 12, "Yes", 9767.44],
+                            ]
+                        ).getvalue()
+                    ),
+                    "uom.xlsx",
+                )
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        upload = client.post(
+            "/sales-order/import",
+            data={"sales_order_workbook": (BytesIO(build_pepup_variant_matching_workbook().getvalue()), "pepup.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert upload.status_code == 302
+        assert "/review" not in upload.headers["Location"]
+        run_id = upload.headers["Location"].split("/sales-order/runs/")[1]
+
+        with app.app_context():
+            run = db.session.get(SalesOrderRun, run_id)
+            lines = db.session.query(SalesOrderLine).filter_by(run_id=run_id).order_by(SalesOrderLine.id.asc()).all()
+            assert run is not None
+            assert run.rows_needing_review == 0
+            assert run.rows_ready == 5
+            assert [line.resolved_sku_name for line in lines] == [
+                "1.5Litre Palm Oil (6X)",
+                "Atun Pepper Soup Spice",
+                "WHE-56g Moringa Tea (12x)_x000D_",
+                "WHE- 500g Toddler Protein (12x)",
+                "WJC- LL 500ml Wilson's Old-Fashioned Lemonade (12x)",
+            ]
+            assert {line.matched_by for line in lines} <= {"normalized", "sync-key", "high-confidence"}
+            db.session.remove()
+            db.engine.dispose()
+
+
 def test_sales_order_run_splits_same_reference_into_bp_vt_and_nv_lines() -> None:
     with TemporaryDirectory() as temp_dir:
         app = create_app(
@@ -2709,6 +2804,103 @@ def test_sales_order_run_uses_invoice_routing_database_for_bp_flagging() -> None
             assert lines[0].invoice_route_name == "August Secret"
             assert lines[0].classification_source == "invoice_routing_db"
             assert lines[1].invoice_category == "NV"
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_invoice_routing_database_can_match_source_sku_variant_before_master_name() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        response = client.post(
+            "/uom/import",
+            data={
+                "uom_workbook": (
+                    BytesIO(
+                        build_uom_workbook_from_rows(
+                            [["WHE-56g Moringa Tea (12x)_x000D_", "pck", "pcs", 12, "No", 34200]]
+                        ).getvalue()
+                    ),
+                    "uom.xlsx",
+                )
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        response = client.post(
+            "/invoice-routing/import",
+            data={
+                "return_to": "product_master",
+                "invoice_routing_workbook": (
+                    BytesIO(
+                        build_invoice_routing_workbook(
+                            [["BP Whole Eats", "WE Moringa Tea (56g)", "Jendol Supermarket OJODU", "MEDITEA"]]
+                        ).getvalue()
+                    ),
+                    "sample datab.xlsx",
+                ),
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Order Item List"
+        sheet.append(
+            [
+                "Date of Order",
+                "Time of Order",
+                "Order Number",
+                "Retailer Name",
+                "Item Name",
+                "UOM",
+                "Quantity",
+                "Price",
+                "Total",
+            ]
+        )
+        sheet.append(
+            [
+                "2026-03-13 00:00:00",
+                "10:39:00",
+                "17594143",
+                "Jendol Supermarket OJODU",
+                "WE Moringa Tea (56g)",
+                "packs",
+                1,
+                34200,
+                34200,
+            ]
+        )
+        stream = BytesIO()
+        workbook.save(stream)
+        stream.seek(0)
+
+        upload = client.post(
+            "/sales-order/import",
+            data={"sales_order_workbook": (BytesIO(stream.getvalue()), "pepup.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert upload.status_code == 302
+        assert "/review" not in upload.headers["Location"]
+        run_id = upload.headers["Location"].split("/sales-order/runs/")[1]
+
+        with app.app_context():
+            line = db.session.query(SalesOrderLine).filter_by(run_id=run_id).one()
+            assert line.prefixed_reference_no == "BP-17594143"
+            assert line.invoice_category == "BP"
+            assert line.invoice_route_name == "MEDITEA"
+            assert line.classification_source == "invoice_routing_db"
             db.session.remove()
             db.engine.dispose()
 

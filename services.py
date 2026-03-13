@@ -1249,14 +1249,33 @@ def resolve_product_match(source_sku: str, products: list[Product], aliases: lis
         if product is not None:
             return ProductMatch(product, "approved-alias")
 
+    sync_key = normalize_uom_sync_key(source_sku)
+    sync_products = [product for product in products if normalize_uom_sync_key(product.sku_name) == sync_key]
+    if len(sync_products) == 1:
+        return ProductMatch(sync_products[0], "sync-key")
+
+    sync_aliases = [alias for alias in aliases if normalize_uom_sync_key(alias.alias_name) == sync_key]
+    if len(sync_aliases) == 1:
+        product = db.session.get(Product, sync_aliases[0].product_id)
+        if product is not None:
+            return ProductMatch(product, "approved-alias")
+
+    best_match = _best_high_confidence_product_match(source_sku, products)
+    if best_match is not None:
+        return ProductMatch(best_match, "high-confidence")
+
     return None
 
 
 def suggest_products(source_sku: str, products: list[Product], limit: int = 5) -> list[Product]:
     normalized = normalize_sku(source_sku)
+    sync_key = normalize_uom_sync_key(source_sku)
     ranked = []
     for product in products:
-        score = SequenceMatcher(None, normalized, product.normalized_name).ratio()
+        product_sync_key = normalize_uom_sync_key(product.sku_name)
+        normalized_score = SequenceMatcher(None, normalized, product.normalized_name).ratio()
+        sync_score = SequenceMatcher(None, sync_key, product_sync_key).ratio()
+        score = max(normalized_score, sync_score)
         if score >= 0.42:
             ranked.append((score, product))
 
@@ -1274,10 +1293,43 @@ def suggest_products(source_sku: str, products: list[Product], limit: int = 5) -
 
 
 def normalize_sku(value: str) -> str:
+    text = value.upper().replace("'S", "S")
+    for source, target in (
+        ("LITRES", "LITRE"),
+        ("LITERS", "LITRE"),
+        ("LTRS", "LITRE"),
+        ("LTR", "LITRE"),
+    ):
+        text = text.replace(source, target)
     cleaned = []
-    for character in value.upper():
+    for character in text:
         cleaned.append(character if character.isalnum() else " ")
     return " ".join("".join(cleaned).split())
+
+
+def _best_high_confidence_product_match(source_sku: str, products: list[Product]) -> Product | None:
+    normalized = normalize_sku(source_sku)
+    sync_key = normalize_uom_sync_key(source_sku)
+    scored: list[tuple[float, float, float, Product]] = []
+    for product in products:
+        product_sync_key = normalize_uom_sync_key(product.sku_name)
+        normalized_score = SequenceMatcher(None, normalized, product.normalized_name).ratio()
+        sync_score = SequenceMatcher(None, sync_key, product_sync_key).ratio()
+        score = max(normalized_score, sync_score)
+        scored.append((score, sync_score, normalized_score, product))
+
+    if not scored:
+        return None
+
+    scored.sort(key=lambda item: (-item[0], -item[1], -item[2], item[3].sku_name.upper()))
+    top_score, top_sync_score, _, top_product = scored[0]
+    second_score = scored[1][0] if len(scored) > 1 else 0.0
+
+    if top_score < 0.86:
+        return None
+    if top_score - second_score < 0.12 and top_sync_score < 0.97:
+        return None
+    return top_product
 
 
 def _contains_match(left: str, right: str) -> bool:
@@ -1567,6 +1619,7 @@ def classify_invoice_line(
     raw_reference_no: str | None,
     store_name: str | None,
     sku_name: str | None,
+    source_sku_name: str | None = None,
     product: Product | None,
     bp_rules: list[BrandPartnerRule] | None = None,
     invoice_routing_entries: list[InvoiceRoutingEntry] | None = None,
@@ -1598,11 +1651,17 @@ def classify_invoice_line(
         )
 
     resolved_sku_name = _string_value(sku_name or (product.sku_name if product is not None else ""))
-    invoice_route = match_invoice_routing_entry(
-        store_name=store_name,
-        sku_name=resolved_sku_name,
-        entries=invoice_routing_entries,
-    )
+    invoice_route = None
+    for candidate_sku_name in [source_sku_name, resolved_sku_name]:
+        if not _string_value(candidate_sku_name):
+            continue
+        invoice_route = match_invoice_routing_entry(
+            store_name=store_name,
+            sku_name=candidate_sku_name,
+            entries=invoice_routing_entries,
+        )
+        if invoice_route is not None:
+            break
     if invoice_route is not None:
         normalized_invoice_name = invoice_route.normalized_invoice_name or normalize_sku(invoice_route.invoice_name)
         invoice_owner = INVOICE_OWNER_DALA if normalized_invoice_name == INVOICE_OWNER_DALA else INVOICE_OWNER_BP
@@ -1676,6 +1735,7 @@ def apply_invoice_classification_to_record(
     product: Product | None,
     store_name: str | None,
     sku_name: str | None,
+    source_sku_name: str | None = None,
     raw_reference_no: str | None,
     bp_rules: list[BrandPartnerRule] | None = None,
     invoice_routing_entries: list[InvoiceRoutingEntry] | None = None,
@@ -1687,6 +1747,7 @@ def apply_invoice_classification_to_record(
         raw_reference_no=raw_reference_no or stripped_reference,
         store_name=store_name,
         sku_name=sku_name,
+        source_sku_name=source_sku_name or getattr(record, "source_sku", None),
         product=product,
         bp_rules=bp_rules,
         invoice_routing_entries=invoice_routing_entries,
@@ -1725,6 +1786,7 @@ def apply_product_to_line(
         product=product,
         store_name=line.supermarket_name,
         sku_name=product.sku_name,
+        source_sku_name=getattr(line, "source_sku", None),
         raw_reference_no=getattr(line, "raw_reference_no", None) or line.order_number,
         bp_rules=bp_rules,
         invoice_routing_entries=invoice_routing_entries,
