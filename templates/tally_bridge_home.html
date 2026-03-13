@@ -47,6 +47,16 @@
       <small>still waiting on send or confirmation</small>
     </article>
     <article class="glass-card stat-card">
+      <span class="panel-label">Clear runs</span>
+      <strong>{{ summary.clear_outbound_count }}</strong>
+      <small>chain verified by diagnostics</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Warning runs</span>
+      <strong>{{ summary.warning_outbound_count }}</strong>
+      <small>diagnostics incomplete or missing</small>
+    </article>
+    <article class="glass-card stat-card">
       <span class="panel-label">Blocked runs</span>
       <strong>{{ summary.blocked_outbound_count }}</strong>
       <small>stopped by chain integrity checks</small>
@@ -280,6 +290,12 @@
         <h2>Prepared Sales Order handoffs</h2>
       </div>
     </div>
+    <div class="chip-row">
+      <a class="database-toolbar-pill {% if summary.outbound_guard_filter == 'all' %}is-active{% endif %}" href="{{ url_for('tally_bridge_home', guard='all') }}">All {{ summary.outbound_run_count }}</a>
+      <a class="database-toolbar-pill {% if summary.outbound_guard_filter == 'clear' %}is-active{% endif %}" href="{{ url_for('tally_bridge_home', guard='clear') }}">Clear {{ summary.clear_outbound_count }}</a>
+      <a class="database-toolbar-pill {% if summary.outbound_guard_filter == 'warning' %}is-active{% endif %}" href="{{ url_for('tally_bridge_home', guard='warning') }}">Warning {{ summary.warning_outbound_count }}</a>
+      <a class="database-toolbar-pill {% if summary.outbound_guard_filter == 'blocked' %}is-active{% endif %}" href="{{ url_for('tally_bridge_home', guard='blocked') }}">Blocked {{ summary.blocked_outbound_count }}</a>
+    </div>
     {% if summary.recent_outbound_runs %}
       <div class="warning-stack">
         {% for item in summary.recent_outbound_runs %}
@@ -304,9 +320,9 @@
       </div>
     {% else %}
       <div class="delivery-run-empty">
-        <span class="mini-chip">No outbound packages yet</span>
-        <h3>Prepare the first handoff from a clean Sales Order run.</h3>
-        <p class="empty-state">Once you send a ready Sales Order run into Tally Bridge, the outbound queue will live here.</p>
+        <span class="mini-chip">No {{ summary.outbound_guard_filter }} runs</span>
+        <h3>No outbound runs match this filter right now.</h3>
+        <p class="empty-state">Switch the filter or prepare a new Sales Order handoff to populate this queue.</p>
       </div>
     {% endif %}
   </section>

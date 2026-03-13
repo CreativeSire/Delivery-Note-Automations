@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import re
 from shutil import copy2
 from io import BytesIO
+import mimetypes
 from pathlib import Path
 from uuid import uuid4
 
@@ -97,7 +99,10 @@ class TallyBridgeSummary:
     recent_runs: list[TallyDiagnosticsRun]
     outbound_run_count: int
     outbound_open_count: int
+    clear_outbound_count: int
+    warning_outbound_count: int
     blocked_outbound_count: int
+    outbound_guard_filter: str
     blocked_outbound_runs: list["TallyBridgeQueueItem"]
     recent_outbound_runs: list["TallyBridgeQueueItem"]
 
@@ -150,6 +155,7 @@ class TallyBridgeRunDetail:
     staged_exists: bool
     register_exists: bool
     link_guard: "TallyBridgeLinkGuard"
+    auto_fetch_allowed: bool
 
 
 @dataclass
@@ -167,7 +173,7 @@ class TallyBridgeQueueItem:
     link_guard: TallyBridgeLinkGuard
 
 
-def build_tally_bridge_summary() -> TallyBridgeSummary:
+def build_tally_bridge_summary(*, guard_filter: str = "all") -> TallyBridgeSummary:
     profiles = list(db.session.scalars(select(TallyBridgeProfile).order_by(TallyBridgeProfile.is_active.desc(), TallyBridgeProfile.name.asc())))
     active_profile = next((profile for profile in profiles if profile.is_active), profiles[0] if profiles else None)
     latest_run = db.session.scalar(select(TallyDiagnosticsRun).order_by(TallyDiagnosticsRun.created_at.desc()).limit(1))
@@ -181,12 +187,23 @@ def build_tally_bridge_summary() -> TallyBridgeSummary:
     outbound_open_count = db.session.scalar(
         select(func.count(TallyBridgeRun.id)).where(TallyBridgeRun.status.not_in(["confirmed_in_tally", "failed"]))
     ) or 0
-    outbound_runs = list(db.session.scalars(select(TallyBridgeRun).order_by(TallyBridgeRun.created_at.desc()).limit(12)))
-    recent_outbound_runs = [
+    outbound_runs = list(db.session.scalars(select(TallyBridgeRun).order_by(TallyBridgeRun.created_at.desc()).limit(24)))
+    queue_items = [
         TallyBridgeQueueItem(run=run, link_guard=resolve_tally_bridge_link_guard(run.profile_id))
         for run in outbound_runs
     ]
-    blocked_outbound_runs = [item for item in recent_outbound_runs if item.link_guard.status == "blocked"]
+    clear_outbound_runs = [item for item in queue_items if item.link_guard.status == "clear"]
+    warning_outbound_runs = [item for item in queue_items if item.link_guard.status == "warning"]
+    blocked_outbound_runs = [item for item in queue_items if item.link_guard.status == "blocked"]
+    selected_filter = guard_filter if guard_filter in {"all", "clear", "warning", "blocked"} else "all"
+    if selected_filter == "clear":
+        recent_outbound_runs = clear_outbound_runs
+    elif selected_filter == "warning":
+        recent_outbound_runs = warning_outbound_runs
+    elif selected_filter == "blocked":
+        recent_outbound_runs = blocked_outbound_runs
+    else:
+        recent_outbound_runs = queue_items
     return TallyBridgeSummary(
         profiles=profiles,
         active_profile=active_profile,
@@ -197,7 +214,10 @@ def build_tally_bridge_summary() -> TallyBridgeSummary:
         recent_runs=recent_runs,
         outbound_run_count=outbound_run_count,
         outbound_open_count=outbound_open_count,
+        clear_outbound_count=len(clear_outbound_runs),
+        warning_outbound_count=len(warning_outbound_runs),
         blocked_outbound_count=len(blocked_outbound_runs),
+        outbound_guard_filter=selected_filter,
         blocked_outbound_runs=blocked_outbound_runs,
         recent_outbound_runs=recent_outbound_runs,
     )
@@ -270,6 +290,7 @@ def build_tally_bridge_run_detail(run_id: str) -> TallyBridgeRunDetail | None:
         staged_exists=bool(staged_path and staged_path.exists()),
         register_exists=bool(run.register_storage_path and Path(run.register_storage_path).exists()),
         link_guard=link_guard,
+        auto_fetch_allowed=bool(run.profile and run.profile.connection_mode in {"file_drop", "hybrid"} and link_guard.status == "clear"),
     )
 
 
@@ -531,30 +552,43 @@ def import_tally_register_for_bridge_run(run_id: str, *, file_storage: object) -
     if not payload:
         raise ServiceError("The returned Tally register file is empty.")
 
-    target_dir = _bridge_storage_dir("registers", run.id)
-    safe_name = secure_filename(filename) or f"register-{run.id}.xlsx"
-    register_path = target_dir / f"{uuid4().hex}-{safe_name}"
-    register_path.write_bytes(payload)
-
-    inbound_upload = FileStorage(
-        stream=BytesIO(payload),
+    return _attach_register_payload_to_bridge_run(
+        run,
+        payload=payload,
         filename=filename,
         content_type=_string_value(getattr(file_storage, "mimetype", "")) or None,
     )
-    try:
-        sku_run = create_sku_automator_run(inbound_upload)
-    except WorkflowError as exc:
-        raise ServiceError(str(exc)) from exc
 
-    run.register_filename = filename
-    run.register_storage_path = str(register_path)
-    run.register_content_type = inbound_upload.content_type
-    run.register_received_at = utcnow()
-    run.sku_automator_run_id = sku_run.id
-    run.status = "linked_to_sku_automator"
-    run.error_message = None
-    db.session.commit()
-    return run
+
+def pull_tally_register_from_profile_target(run_id: str) -> TallyBridgeRun:
+    run = db.session.get(TallyBridgeRun, run_id)
+    if run is None:
+        raise ServiceError("This Tally Bridge run could not be found.")
+    guard = resolve_tally_bridge_link_guard(run.profile_id)
+    if guard.status != "clear":
+        raise ServiceError("Auto-fetch is only available after the Tally chain is verified as clear in diagnostics.")
+    if run.profile is None or run.profile.connection_mode not in {"file_drop", "hybrid"}:
+        raise ServiceError("Auto-fetch needs a file-drop or hybrid Tally profile.")
+
+    destination = _nullable_text(run.profile.endpoint_url)
+    if not destination:
+        raise ServiceError("This Tally profile does not have a watched local folder configured yet.")
+
+    watched_dir = Path(destination)
+    if not watched_dir.exists() or not watched_dir.is_dir():
+        raise ServiceError("The watched local folder for this Tally profile does not exist.")
+
+    candidate = _select_returned_register_candidate(run, watched_dir)
+    if candidate is None:
+        raise ServiceError("No returned Tally register file was found in the watched folder yet.")
+
+    content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+    return _attach_register_payload_to_bridge_run(
+        run,
+        payload=candidate.read_bytes(),
+        filename=candidate.name,
+        content_type=content_type,
+    )
 
 
 def build_tally_link_integrity_summary(artifacts: list[TallyDiagnosticsArtifact]) -> TallyLinkIntegritySummary:
@@ -650,6 +684,39 @@ def assert_tally_bridge_link_guard(run: TallyBridgeRun, *, action_label: str) ->
     )
 
 
+def _attach_register_payload_to_bridge_run(
+    run: TallyBridgeRun,
+    *,
+    payload: bytes,
+    filename: str,
+    content_type: str | None,
+) -> TallyBridgeRun:
+    target_dir = _bridge_storage_dir("registers", run.id)
+    safe_name = secure_filename(filename) or f"register-{run.id}.xlsx"
+    register_path = target_dir / f"{uuid4().hex}-{safe_name}"
+    register_path.write_bytes(payload)
+
+    inbound_upload = FileStorage(
+        stream=BytesIO(payload),
+        filename=filename,
+        content_type=content_type,
+    )
+    try:
+        sku_run = create_sku_automator_run(inbound_upload)
+    except WorkflowError as exc:
+        raise ServiceError(str(exc)) from exc
+
+    run.register_filename = filename
+    run.register_storage_path = str(register_path)
+    run.register_content_type = inbound_upload.content_type
+    run.register_received_at = utcnow()
+    run.sku_automator_run_id = sku_run.id
+    run.status = "linked_to_sku_automator"
+    run.error_message = None
+    db.session.commit()
+    return run
+
+
 def derive_tally_bridge_mode(run: TallyDiagnosticsRun) -> str:
     if (
         run.xml_http_supported == "yes"
@@ -676,6 +743,55 @@ def _latest_relevant_diagnostics_run(profile_id: int | None) -> TallyDiagnostics
     return db.session.scalar(
         select(TallyDiagnosticsRun).order_by(TallyDiagnosticsRun.completed_at.desc(), TallyDiagnosticsRun.created_at.desc()).limit(1)
     )
+
+
+def _select_returned_register_candidate(run: TallyBridgeRun, watched_dir: Path) -> Path | None:
+    allowed_suffixes = {".xlsx", ".xls", ".csv", ".tsv", ".txt"}
+    excluded_paths = {
+        Path(run.payload_storage_path).resolve(),
+    }
+    if run.staged_storage_path:
+        excluded_paths.add(Path(run.staged_storage_path).resolve())
+    if run.register_storage_path:
+        excluded_paths.add(Path(run.register_storage_path).resolve())
+
+    threshold = run.sent_at or run.created_at
+    if threshold is not None:
+        if threshold.tzinfo is None:
+            threshold = threshold.replace(tzinfo=UTC)
+        else:
+            threshold = threshold.astimezone(UTC)
+    candidates: list[Path] = []
+    for path in watched_dir.iterdir():
+        if not path.is_file() or path.suffix.lower() not in allowed_suffixes:
+            continue
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if resolved in excluded_paths:
+            continue
+        modified_at = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+        if threshold is not None and modified_at < threshold:
+            continue
+        candidates.append(path)
+
+    if not candidates:
+        return None
+
+    def candidate_rank(path: Path) -> tuple[int, float]:
+        name = path.name.lower()
+        score = 0
+        if "register" in name:
+            score += 3
+        if "salesorder" in name or "sales-order" in name:
+            score += 2
+        if "dala" in name:
+            score += 1
+        return (score, path.stat().st_mtime)
+
+    candidates.sort(key=candidate_rank, reverse=True)
+    return candidates[0]
 
 
 def _resolve_profile(raw_profile_id: str | None) -> TallyBridgeProfile | None:

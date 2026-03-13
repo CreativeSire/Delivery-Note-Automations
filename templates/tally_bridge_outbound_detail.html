@@ -84,6 +84,11 @@
             <button class="secondary-button" type="submit">Stage to profile target</button>
           </form>
         {% endif %}
+        {% if detail.auto_fetch_allowed %}
+          <form action="{{ url_for('pull_tally_bridge_register', run_id=detail.run.id) }}" method="post">
+            <button class="secondary-button" type="submit">Pull register from watched folder</button>
+          </form>
+        {% endif %}
         {% if detail.run.sales_order_run %}
           <a class="secondary-button" href="{{ url_for('view_sales_order_run', run_id=detail.run.sales_order_run.id) }}">Back to Sales Order run</a>
         {% endif %}
@@ -93,6 +98,8 @@
         <p class="empty-state">
           {% if detail.link_guard.status == 'blocked' %}
             The bridge is holding this run because the latest diagnostics say the imported Tally chain breaks. Download is still available for inspection, but staging and downstream continuation stay blocked until diagnostics are fixed.
+          {% elif detail.auto_fetch_allowed %}
+            This run is on a cleared bridge path. If your profile target folder receives the returned Tally register automatically, use the pull action to import it here without a manual upload step.
           {% else %}
             If your Tally setup is still manual today, download this payload and upload it exactly once from the Tally workstation. If the profile uses a watched folder, staging can drop the same payload into that target path.
           {% endif %}
@@ -188,6 +195,8 @@
       <p class="page-copy">
         {% if detail.link_guard.status == 'blocked' %}
           The bridge is not allowing the returned register to continue into SKU Automator because the imported Tally chain is currently flagged as broken.
+        {% elif detail.auto_fetch_allowed %}
+          This run can also pull the returned register directly from the watched folder because the diagnostics gate is clear.
         {% else %}
           Upload the returned Tally register here and the bridge will create the linked SKU Automator run automatically. This keeps the outbound and inbound evidence on the same bridge record.
         {% endif %}

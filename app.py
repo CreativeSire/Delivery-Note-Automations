@@ -109,6 +109,7 @@ from tally_bridge_services import (
     get_tally_bridge_run,
     get_tally_diagnostics_artifact,
     import_tally_register_for_bridge_run,
+    pull_tally_register_from_profile_target,
     save_tally_bridge_profile,
     stage_tally_bridge_run_to_profile_target,
     update_tally_bridge_run_status,
@@ -236,7 +237,8 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.get("/tally-bridge")
     def tally_bridge_home() -> str:
-        summary = build_tally_bridge_summary()
+        guard_filter = request.args.get("guard", "all").strip().lower()
+        summary = build_tally_bridge_summary(guard_filter=guard_filter)
         return render_template(
             "tally_bridge_home.html",
             summary=summary,
@@ -519,6 +521,32 @@ def create_app(test_config: dict | None = None) -> Flask:
         )
         db.session.commit()
         flash("Returned Tally register imported and linked to SKU Automator.", "success")
+        return redirect(url_for("view_tally_bridge_run", run_id=run.id))
+
+    @app.post("/tally-bridge/runs/<run_id>/register/pull")
+    def pull_tally_bridge_register(run_id: str) -> str:
+        try:
+            run = pull_tally_register_from_profile_target(run_id)
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("view_tally_bridge_run", run_id=run_id))
+
+        sku_run = run.sku_automator_run
+        record_audit_event(
+            module_name="Tally Bridge",
+            event_type="register_pulled",
+            entity_type="tally_bridge_run",
+            entity_id=run.id,
+            entity_name=run.register_filename or run.payload_filename,
+            summary_text=f"Pulled returned Tally register '{run.register_filename}' from the profile target and linked it to SKU Automator.",
+            details={
+                "sku_automator_run_id": sku_run.id if sku_run else "",
+                "rows_ready": sku_run.rows_ready if sku_run else 0,
+                "rows_needing_review": sku_run.rows_needing_review if sku_run else 0,
+            },
+        )
+        db.session.commit()
+        flash("Returned Tally register pulled from the watched folder and linked to SKU Automator.", "success")
         return redirect(url_for("view_tally_bridge_run", run_id=run.id))
 
     @app.get("/tally-bridge/runs/<run_id>/register/download")
