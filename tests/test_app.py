@@ -475,9 +475,42 @@ def test_tally_bridge_blocks_staging_and_register_import_when_chain_is_broken() 
         )
         assert uom_import.status_code == 302
 
+        sales = Workbook()
+        sales_sheet = sales.active
+        sales_sheet.title = "Order Item List"
+        sales_sheet.append(
+            [
+                "Date of Order",
+                "Time of Order",
+                "Order Number",
+                "Retailer Name",
+                "Item Name",
+                "UOM",
+                "Quantity",
+                "Price",
+                "Total",
+            ]
+        )
+        sales_sheet.append(
+            [
+                "2026-03-13 00:00:00",
+                "09:00:00",
+                "17599908",
+                "Sample Mart",
+                "SKU Alpha",
+                "cases",
+                1,
+                100,
+                100,
+            ]
+        )
+        sales_bytes = BytesIO()
+        sales.save(sales_bytes)
+        sales_bytes.seek(0)
+
         upload = client.post(
             "/sales-order/import",
-            data={"sales_order_workbook": (BytesIO(build_pepup_orders_workbook().getvalue()), "pepup.xlsx")},
+            data={"sales_order_workbook": (BytesIO(sales_bytes.getvalue()), "orders.xlsx")},
             content_type="multipart/form-data",
             follow_redirects=False,
         )
@@ -579,6 +612,26 @@ def test_tally_bridge_blocks_staging_and_register_import_when_chain_is_broken() 
             bridge_run = db.session.get(TallyBridgeRun, bridge_run_id)
             assert bridge_run is not None
             assert bridge_run.status == "needs_attention"
+
+        home = client.get("/tally-bridge")
+        assert home.status_code == 200
+        home_html = home.get_data(as_text=True)
+        assert "Blocked chain queue" in home_html
+        assert "Runs stopped by diagnostics" in home_html
+        assert "orders.xlsx" in home_html
+
+        update = client.post(
+            f"/tally-bridge/runs/{bridge_run_id}/status",
+            data={"status": "confirmed_in_tally", "notes": "", "error_message": ""},
+            follow_redirects=False,
+        )
+        assert update.status_code == 302
+
+        with app.app_context():
+            bridge_run = db.session.get(TallyBridgeRun, bridge_run_id)
+            assert bridge_run is not None
+            assert bridge_run.status == "needs_attention"
+            assert bridge_run.confirmed_at is None
 
         stage = client.post(f"/tally-bridge/runs/{bridge_run_id}/stage", follow_redirects=False)
         assert stage.status_code == 302

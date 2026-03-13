@@ -97,7 +97,9 @@ class TallyBridgeSummary:
     recent_runs: list[TallyDiagnosticsRun]
     outbound_run_count: int
     outbound_open_count: int
-    recent_outbound_runs: list[TallyBridgeRun]
+    blocked_outbound_count: int
+    blocked_outbound_runs: list["TallyBridgeQueueItem"]
+    recent_outbound_runs: list["TallyBridgeQueueItem"]
 
 
 @dataclass
@@ -159,6 +161,12 @@ class TallyBridgeLinkGuard:
     diagnostics_title: str | None
 
 
+@dataclass
+class TallyBridgeQueueItem:
+    run: TallyBridgeRun
+    link_guard: TallyBridgeLinkGuard
+
+
 def build_tally_bridge_summary() -> TallyBridgeSummary:
     profiles = list(db.session.scalars(select(TallyBridgeProfile).order_by(TallyBridgeProfile.is_active.desc(), TallyBridgeProfile.name.asc())))
     active_profile = next((profile for profile in profiles if profile.is_active), profiles[0] if profiles else None)
@@ -173,7 +181,12 @@ def build_tally_bridge_summary() -> TallyBridgeSummary:
     outbound_open_count = db.session.scalar(
         select(func.count(TallyBridgeRun.id)).where(TallyBridgeRun.status.not_in(["confirmed_in_tally", "failed"]))
     ) or 0
-    recent_outbound_runs = list(db.session.scalars(select(TallyBridgeRun).order_by(TallyBridgeRun.created_at.desc()).limit(8)))
+    outbound_runs = list(db.session.scalars(select(TallyBridgeRun).order_by(TallyBridgeRun.created_at.desc()).limit(12)))
+    recent_outbound_runs = [
+        TallyBridgeQueueItem(run=run, link_guard=resolve_tally_bridge_link_guard(run.profile_id))
+        for run in outbound_runs
+    ]
+    blocked_outbound_runs = [item for item in recent_outbound_runs if item.link_guard.status == "blocked"]
     return TallyBridgeSummary(
         profiles=profiles,
         active_profile=active_profile,
@@ -184,6 +197,8 @@ def build_tally_bridge_summary() -> TallyBridgeSummary:
         recent_runs=recent_runs,
         outbound_run_count=outbound_run_count,
         outbound_open_count=outbound_open_count,
+        blocked_outbound_count=len(blocked_outbound_runs),
+        blocked_outbound_runs=blocked_outbound_runs,
         recent_outbound_runs=recent_outbound_runs,
     )
 
@@ -450,7 +465,11 @@ def update_tally_bridge_run_status(run_id: str, values: dict[str, str]) -> Tally
     if run is None:
         raise ServiceError("This Tally Bridge run could not be found.")
 
-    run.status = _choice_value(values.get("status"), BRIDGE_RUN_STATUS_OPTIONS, run.status)
+    next_status = _choice_value(values.get("status"), BRIDGE_RUN_STATUS_OPTIONS, run.status)
+    if next_status in {"sent_to_tally", "confirmed_in_tally"}:
+        assert_tally_bridge_link_guard(run, action_label=f"mark this run as {next_status.replace('_', ' ')}")
+
+    run.status = next_status
     run.notes = _nullable_text(values.get("notes"))
     error_message = _nullable_text(values.get("error_message"))
     run.error_message = error_message if run.status in {"needs_attention", "failed"} else None

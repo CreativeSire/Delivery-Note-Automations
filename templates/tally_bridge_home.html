@@ -46,6 +46,11 @@
       <strong>{{ summary.outbound_open_count }}</strong>
       <small>still waiting on send or confirmation</small>
     </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Blocked runs</span>
+      <strong>{{ summary.blocked_outbound_count }}</strong>
+      <small>stopped by chain integrity checks</small>
+    </article>
   </section>
 
   <section class="content-split content-split-hero">
@@ -229,27 +234,70 @@
   <section class="glass-card">
     <div class="module-head compact">
       <div>
+        <p class="eyebrow">Blocked chain queue</p>
+        <h2>Runs stopped by diagnostics</h2>
+      </div>
+    </div>
+    {% if summary.blocked_outbound_runs %}
+      <div class="warning-stack">
+        {% for item in summary.blocked_outbound_runs %}
+          <article class="warning-row warning-row-rich tally-run-card">
+            <div class="tally-run-card-main">
+              <div>
+                <strong>{{ item.run.payload_filename }}</strong>
+                <p class="empty-state">{{ item.link_guard.message }}</p>
+              </div>
+              <div class="chip-row">
+                <span class="database-toolbar-pill">{{ item.run.status.replace('_', ' ') }}</span>
+                <span class="database-toolbar-pill">{{ item.link_guard.title }}</span>
+                {% if item.link_guard.diagnostics_title %}
+                  <span class="database-toolbar-pill">{{ item.link_guard.diagnostics_title }}</span>
+                {% endif %}
+              </div>
+            </div>
+            <div class="actions">
+              <a class="secondary-button" href="{{ url_for('view_tally_bridge_run', run_id=item.run.id) }}">Open outbound run</a>
+              {% if item.link_guard.diagnostics_run_id %}
+                <a class="secondary-button" href="{{ url_for('view_tally_diagnostics', run_id=item.link_guard.diagnostics_run_id) }}">Open diagnostics</a>
+              {% endif %}
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="delivery-run-empty">
+        <span class="mini-chip">No blocked runs</span>
+        <h3>The bridge has no chain-blocked outbound runs right now.</h3>
+        <p class="empty-state">If diagnostics prove an imported Tally path is broken, the affected outbound runs will appear here automatically.</p>
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="glass-card">
+    <div class="module-head compact">
+      <div>
         <p class="eyebrow">Outbound queue</p>
         <h2>Prepared Sales Order handoffs</h2>
       </div>
     </div>
     {% if summary.recent_outbound_runs %}
       <div class="warning-stack">
-        {% for run in summary.recent_outbound_runs %}
+        {% for item in summary.recent_outbound_runs %}
           <article class="warning-row warning-row-rich tally-run-card">
             <div class="tally-run-card-main">
               <div>
-                <strong>{{ run.payload_filename }}</strong>
-                <p class="empty-state">Source run: {{ run.sales_order_run.original_filename if run.sales_order_run else run.sales_order_run_id }}</p>
+                <strong>{{ item.run.payload_filename }}</strong>
+                <p class="empty-state">Source run: {{ item.run.sales_order_run.original_filename if item.run.sales_order_run else item.run.sales_order_run_id }}</p>
               </div>
               <div class="chip-row">
-                <span class="database-toolbar-pill">{{ run.status.replace('_', ' ') }}</span>
-                <span class="database-toolbar-pill">{{ run.bridge_mode.replace('_', ' ').title() }}</span>
-                <span class="database-toolbar-pill">{{ run.rows_ready }} rows</span>
+                <span class="database-toolbar-pill">{{ item.run.status.replace('_', ' ') }}</span>
+                <span class="database-toolbar-pill">{{ item.run.bridge_mode.replace('_', ' ').title() }}</span>
+                <span class="database-toolbar-pill">{{ item.run.rows_ready }} rows</span>
+                <span class="database-toolbar-pill {% if item.link_guard.status == 'clear' %}is-active{% endif %}">{{ item.link_guard.status }}</span>
               </div>
             </div>
             <div class="actions">
-              <a class="secondary-button" href="{{ url_for('view_tally_bridge_run', run_id=run.id) }}">Open outbound run</a>
+              <a class="secondary-button" href="{{ url_for('view_tally_bridge_run', run_id=item.run.id) }}">Open outbound run</a>
             </div>
           </article>
         {% endfor %}
