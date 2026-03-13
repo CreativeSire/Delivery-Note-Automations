@@ -103,6 +103,11 @@ class TallyBridgeSummary:
     warning_outbound_count: int
     blocked_outbound_count: int
     outbound_guard_filter: str
+    ready_pipeline_count: int
+    sent_pipeline_count: int
+    confirmed_pipeline_count: int
+    register_pipeline_count: int
+    linked_pipeline_count: int
     blocked_outbound_runs: list["TallyBridgeQueueItem"]
     recent_outbound_runs: list["TallyBridgeQueueItem"]
 
@@ -171,6 +176,8 @@ class TallyBridgeLinkGuard:
 class TallyBridgeQueueItem:
     run: TallyBridgeRun
     link_guard: TallyBridgeLinkGuard
+    pipeline_stage: str
+    pipeline_stage_label: str
 
 
 def build_tally_bridge_summary(*, guard_filter: str = "all") -> TallyBridgeSummary:
@@ -188,10 +195,17 @@ def build_tally_bridge_summary(*, guard_filter: str = "all") -> TallyBridgeSumma
         select(func.count(TallyBridgeRun.id)).where(TallyBridgeRun.status.not_in(["confirmed_in_tally", "failed"]))
     ) or 0
     outbound_runs = list(db.session.scalars(select(TallyBridgeRun).order_by(TallyBridgeRun.created_at.desc()).limit(24)))
-    queue_items = [
-        TallyBridgeQueueItem(run=run, link_guard=resolve_tally_bridge_link_guard(run.profile_id))
-        for run in outbound_runs
-    ]
+    queue_items: list[TallyBridgeQueueItem] = []
+    for run in outbound_runs:
+        pipeline_stage = _derive_tally_bridge_pipeline_stage(run)
+        queue_items.append(
+            TallyBridgeQueueItem(
+                run=run,
+                link_guard=resolve_tally_bridge_link_guard(run.profile_id),
+                pipeline_stage=pipeline_stage,
+                pipeline_stage_label=_tally_bridge_pipeline_stage_label(pipeline_stage),
+            )
+        )
     clear_outbound_runs = [item for item in queue_items if item.link_guard.status == "clear"]
     warning_outbound_runs = [item for item in queue_items if item.link_guard.status == "warning"]
     blocked_outbound_runs = [item for item in queue_items if item.link_guard.status == "blocked"]
@@ -204,6 +218,11 @@ def build_tally_bridge_summary(*, guard_filter: str = "all") -> TallyBridgeSumma
         recent_outbound_runs = blocked_outbound_runs
     else:
         recent_outbound_runs = queue_items
+    ready_pipeline_count = sum(1 for item in queue_items if item.pipeline_stage == "ready")
+    sent_pipeline_count = sum(1 for item in queue_items if item.pipeline_stage == "sent")
+    confirmed_pipeline_count = sum(1 for item in queue_items if item.pipeline_stage == "confirmed")
+    register_pipeline_count = sum(1 for item in queue_items if item.pipeline_stage == "register_received")
+    linked_pipeline_count = sum(1 for item in queue_items if item.pipeline_stage == "linked")
     return TallyBridgeSummary(
         profiles=profiles,
         active_profile=active_profile,
@@ -218,6 +237,11 @@ def build_tally_bridge_summary(*, guard_filter: str = "all") -> TallyBridgeSumma
         warning_outbound_count=len(warning_outbound_runs),
         blocked_outbound_count=len(blocked_outbound_runs),
         outbound_guard_filter=selected_filter,
+        ready_pipeline_count=ready_pipeline_count,
+        sent_pipeline_count=sent_pipeline_count,
+        confirmed_pipeline_count=confirmed_pipeline_count,
+        register_pipeline_count=register_pipeline_count,
+        linked_pipeline_count=linked_pipeline_count,
         blocked_outbound_runs=blocked_outbound_runs,
         recent_outbound_runs=recent_outbound_runs,
     )
@@ -715,6 +739,28 @@ def _attach_register_payload_to_bridge_run(
     run.error_message = None
     db.session.commit()
     return run
+
+
+def _derive_tally_bridge_pipeline_stage(run: TallyBridgeRun) -> str:
+    if run.sku_automator_run_id or run.status == "linked_to_sku_automator":
+        return "linked"
+    if run.register_received_at or run.status == "register_received":
+        return "register_received"
+    if run.confirmed_at or run.status == "confirmed_in_tally":
+        return "confirmed"
+    if run.sent_at or run.status == "sent_to_tally":
+        return "sent"
+    return "ready"
+
+
+def _tally_bridge_pipeline_stage_label(stage: str) -> str:
+    return {
+        "ready": "Ready to send",
+        "sent": "Sent to Tally",
+        "confirmed": "Confirmed in Tally",
+        "register_received": "Register received",
+        "linked": "SKU Automator linked",
+    }.get(stage, stage.replace("_", " ").title())
 
 
 def derive_tally_bridge_mode(run: TallyDiagnosticsRun) -> str:

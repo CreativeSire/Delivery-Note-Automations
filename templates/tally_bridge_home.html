@@ -244,6 +244,42 @@
   <section class="glass-card">
     <div class="module-head compact">
       <div>
+        <p class="eyebrow">Pipeline health</p>
+        <h2>End-to-end bridge state</h2>
+      </div>
+    </div>
+    <div class="stat-row">
+      <article class="glass-card stat-card">
+        <span class="panel-label">Ready</span>
+        <strong>{{ summary.ready_pipeline_count }}</strong>
+        <small>prepared, queued, or staged</small>
+      </article>
+      <article class="glass-card stat-card">
+        <span class="panel-label">Sent</span>
+        <strong>{{ summary.sent_pipeline_count }}</strong>
+        <small>handed into Tally, awaiting confirmation</small>
+      </article>
+      <article class="glass-card stat-card">
+        <span class="panel-label">Confirmed</span>
+        <strong>{{ summary.confirmed_pipeline_count }}</strong>
+        <small>Tally acceptance recorded</small>
+      </article>
+      <article class="glass-card stat-card">
+        <span class="panel-label">Register received</span>
+        <strong>{{ summary.register_pipeline_count }}</strong>
+        <small>returned register captured, not linked yet</small>
+      </article>
+      <article class="glass-card stat-card">
+        <span class="panel-label">SKU linked</span>
+        <strong>{{ summary.linked_pipeline_count }}</strong>
+        <small>register turned into SKU Automator</small>
+      </article>
+    </div>
+  </section>
+
+  <section class="glass-card">
+    <div class="module-head compact">
+      <div>
         <p class="eyebrow">Blocked chain queue</p>
         <h2>Runs stopped by diagnostics</h2>
       </div>
@@ -309,6 +345,7 @@
                 <span class="database-toolbar-pill">{{ item.run.status.replace('_', ' ') }}</span>
                 <span class="database-toolbar-pill">{{ item.run.bridge_mode.replace('_', ' ').title() }}</span>
                 <span class="database-toolbar-pill">{{ item.run.rows_ready }} rows</span>
+                <span class="database-toolbar-pill">{{ item.pipeline_stage_label }}</span>
                 <span class="database-toolbar-pill {% if item.link_guard.status == 'clear' %}is-active{% endif %}">{{ item.link_guard.status }}</span>
               </div>
             </div>

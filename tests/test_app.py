@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -40,6 +40,7 @@ from models import (
     db,
 )
 from services import bootstrap_seed_uom_if_empty
+from tally_bridge_services import build_tally_bridge_summary
 
 
 def build_test_workbook(sheet_name: str = "tracker") -> BytesIO:
@@ -829,6 +830,130 @@ def test_tally_bridge_can_filter_clear_runs_and_pull_register_from_watched_folde
             assert bridge_run.sku_automator_run_id is not None
             assert bridge_run.register_storage_path is not None
             assert Path(bridge_run.register_storage_path).exists()
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_tally_bridge_home_summarizes_pipeline_stage_counts() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        payload_path = Path(temp_dir) / "payload.xlsx"
+        payload_path.write_bytes(b"payload")
+        register_path = Path(temp_dir) / "register.xls"
+        register_path.write_bytes(b"register")
+
+        with app.app_context():
+            sales_order_run = SalesOrderRun(
+                id="sorun1",
+                original_filename="orders.xlsx",
+                status="exported",
+                row_count=1,
+                rows_ready=1,
+                rows_needing_review=0,
+            )
+            sku_run = SkuAutomatorRun(
+                id="skurun1",
+                original_filename="register.xls",
+                status="exported",
+                line_count=1,
+                rows_ready=1,
+                rows_needing_review=0,
+                store_count=1,
+                voucher_count=1,
+                order_reference_count=1,
+            )
+            db.session.add_all([sales_order_run, sku_run])
+            db.session.flush()
+
+            now = datetime.now(UTC)
+            bridge_runs = [
+                TallyBridgeRun(
+                    id="tbready",
+                    sales_order_run_id=sales_order_run.id,
+                    status="ready_to_send",
+                    bridge_mode="manual_fallback",
+                    payload_filename="ready.xlsx",
+                    payload_storage_path=str(payload_path),
+                    rows_ready=1,
+                ),
+                TallyBridgeRun(
+                    id="tbsent",
+                    sales_order_run_id=sales_order_run.id,
+                    status="sent_to_tally",
+                    bridge_mode="manual_fallback",
+                    payload_filename="sent.xlsx",
+                    payload_storage_path=str(payload_path),
+                    rows_ready=1,
+                    sent_at=now,
+                ),
+                TallyBridgeRun(
+                    id="tbconfirmed",
+                    sales_order_run_id=sales_order_run.id,
+                    status="confirmed_in_tally",
+                    bridge_mode="manual_fallback",
+                    payload_filename="confirmed.xlsx",
+                    payload_storage_path=str(payload_path),
+                    rows_ready=1,
+                    sent_at=now,
+                    confirmed_at=now,
+                ),
+                TallyBridgeRun(
+                    id="tbregister",
+                    sales_order_run_id=sales_order_run.id,
+                    status="register_received",
+                    bridge_mode="manual_fallback",
+                    payload_filename="register.xlsx",
+                    payload_storage_path=str(payload_path),
+                    rows_ready=1,
+                    sent_at=now,
+                    confirmed_at=now,
+                    register_received_at=now,
+                    register_filename=register_path.name,
+                    register_storage_path=str(register_path),
+                ),
+                TallyBridgeRun(
+                    id="tblinked",
+                    sales_order_run_id=sales_order_run.id,
+                    sku_automator_run_id=sku_run.id,
+                    status="linked_to_sku_automator",
+                    bridge_mode="manual_fallback",
+                    payload_filename="linked.xlsx",
+                    payload_storage_path=str(payload_path),
+                    rows_ready=1,
+                    sent_at=now,
+                    confirmed_at=now,
+                    register_received_at=now,
+                    register_filename=register_path.name,
+                    register_storage_path=str(register_path),
+                ),
+            ]
+            db.session.add_all(bridge_runs)
+            db.session.commit()
+
+            summary = build_tally_bridge_summary()
+            assert summary.ready_pipeline_count == 1
+            assert summary.sent_pipeline_count == 1
+            assert summary.confirmed_pipeline_count == 1
+            assert summary.register_pipeline_count == 1
+            assert summary.linked_pipeline_count == 1
+
+        client = app.test_client()
+        response = client.get("/tally-bridge")
+        html = response.get_data(as_text=True)
+
+        assert response.status_code == 200
+        assert "End-to-end bridge state" in html
+        assert "SKU Automator linked" in html
+        assert "Register received" in html
+
+        with app.app_context():
             db.session.remove()
             db.engine.dispose()
 
