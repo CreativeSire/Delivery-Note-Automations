@@ -442,6 +442,170 @@ def test_tally_bridge_diagnostics_surfaces_link_integrity_verdicts() -> None:
             db.engine.dispose()
 
 
+def test_tally_bridge_blocks_staging_and_register_import_when_chain_is_broken() -> None:
+    with TemporaryDirectory() as temp_dir:
+        drop_dir = Path(temp_dir) / "tally-drop"
+        drop_dir.mkdir()
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        uom_import = client.post(
+            "/uom/import",
+            data={
+                "uom_workbook": (
+                    BytesIO(
+                        build_uom_workbook_from_rows(
+                            [
+                                ["SKU Alpha", "ctn", "pcs", 12, "Yes", 100],
+                                ["SKU Vanilla", "ctn", "pcs", 12, "No", 120],
+                            ]
+                        ).getvalue()
+                    ),
+                    "uom.xlsx",
+                )
+            },
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert uom_import.status_code == 302
+
+        upload = client.post(
+            "/sales-order/import",
+            data={"sales_order_workbook": (BytesIO(build_pepup_orders_workbook().getvalue()), "pepup.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert upload.status_code == 302
+        assert "/review" not in upload.headers["Location"]
+        run_id = upload.headers["Location"].split("/sales-order/runs/")[1]
+
+        profile_response = client.post(
+            "/tally-bridge/profile",
+            data={
+                "name": "Guarded profile",
+                "connection_mode": "file_drop",
+                "company_name": "DALA",
+                "endpoint_url": str(drop_dir),
+                "profile_xml_http": "yes",
+                "profile_outbound_import": "yes",
+                "profile_register_fetch": "yes",
+            },
+            follow_redirects=False,
+        )
+        assert profile_response.status_code == 302
+
+        with app.app_context():
+            profile = db.session.query(TallyBridgeProfile).filter_by(name="Guarded profile").one()
+            profile_id = profile.id
+
+        create_run = client.post(
+            "/tally-bridge/diagnostics",
+            data={"title": "Broken import proof", "profile_id": str(profile_id)},
+            follow_redirects=False,
+        )
+        assert create_run.status_code == 302
+        diagnostics_run_id = create_run.headers["Location"].rstrip("/").split("/")[-1]
+
+        for artifact_type, payload in (
+            ("sales_order", b"Manual SO VT-17599908"),
+            ("delivery_note", b"Manual DN VT-17599908"),
+            ("sales_invoice", b"Manual SI VT-17599908"),
+        ):
+            response = client.post(
+                f"/tally-bridge/diagnostics/{diagnostics_run_id}/artifacts",
+                data={
+                    "artifact_group": "manual_linked",
+                    "artifact_type": artifact_type,
+                    "artifact_file": (BytesIO(payload), f"manual-{artifact_type}.txt"),
+                },
+                content_type="multipart/form-data",
+                follow_redirects=False,
+            )
+            assert response.status_code == 302
+
+        for artifact_type, payload in (
+            ("sales_order", b"Imported SO VT-17599908"),
+            ("delivery_note", b"Imported DN VT-88888888"),
+            ("sales_invoice", b"Imported SI VT-88888888"),
+        ):
+            response = client.post(
+                f"/tally-bridge/diagnostics/{diagnostics_run_id}/artifacts",
+                data={
+                    "artifact_group": "uploaded_unlinked",
+                    "artifact_type": artifact_type,
+                    "artifact_file": (BytesIO(payload), f"uploaded-{artifact_type}.txt"),
+                },
+                content_type="multipart/form-data",
+                follow_redirects=False,
+            )
+            assert response.status_code == 302
+
+        update_run = client.post(
+            f"/tally-bridge/diagnostics/{diagnostics_run_id}/assessment",
+            data={
+                "status": "bridge_mode_decided",
+                "xml_http_supported": "yes",
+                "outbound_import_supported": "yes",
+                "register_fetch_supported": "yes",
+                "dn_link_supported": "yes",
+                "manual_case_status": "linked",
+                "uploaded_case_status": "unlinked",
+            },
+            follow_redirects=False,
+        )
+        assert update_run.status_code == 302
+
+        bridge_create = client.post(
+            "/tally-bridge/outbound",
+            data={"sales_order_run_id": run_id, "profile_id": str(profile_id)},
+            follow_redirects=False,
+        )
+        assert bridge_create.status_code == 302
+        bridge_run_id = bridge_create.headers["Location"].rstrip("/").split("/")[-1]
+
+        detail_page = client.get(bridge_create.headers["Location"])
+        assert detail_page.status_code == 200
+        html = detail_page.get_data(as_text=True)
+        assert "Imported chain is broken" in html
+        assert "the uploaded case breaks the reference chain after import" in html
+
+        with app.app_context():
+            bridge_run = db.session.get(TallyBridgeRun, bridge_run_id)
+            assert bridge_run is not None
+            assert bridge_run.status == "needs_attention"
+
+        stage = client.post(f"/tally-bridge/runs/{bridge_run_id}/stage", follow_redirects=False)
+        assert stage.status_code == 302
+
+        with app.app_context():
+            bridge_run = db.session.get(TallyBridgeRun, bridge_run_id)
+            assert bridge_run is not None
+            assert bridge_run.staged_storage_path is None
+            assert bridge_run.sku_automator_run_id is None
+
+        register_upload = client.post(
+            f"/tally-bridge/runs/{bridge_run_id}/register",
+            data={"register_file": (BytesIO(build_tally_export_workbook().getvalue()), "salesordertest.xls")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert register_upload.status_code == 302
+
+        with app.app_context():
+            bridge_run = db.session.get(TallyBridgeRun, bridge_run_id)
+            assert bridge_run is not None
+            assert bridge_run.register_storage_path is None
+            assert bridge_run.sku_automator_run_id is None
+            db.session.remove()
+            db.engine.dispose()
+
+
 def test_tally_bridge_outbound_run_can_prepare_and_stage_sales_order_payload() -> None:
     with TemporaryDirectory() as temp_dir:
         app = create_app(

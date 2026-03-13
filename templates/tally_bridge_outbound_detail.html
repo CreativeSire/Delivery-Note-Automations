@@ -55,13 +55,31 @@
     <article class="glass-card">
       <div class="module-head compact">
         <div>
+          <p class="eyebrow">Chain gate</p>
+          <h2>{{ detail.link_guard.title }}</h2>
+        </div>
+      </div>
+      <div class="chip-row">
+        <span class="database-toolbar-pill {% if detail.link_guard.status == 'clear' %}is-active{% endif %}">{{ detail.link_guard.status }}</span>
+        {% if detail.link_guard.diagnostics_run_id %}
+          <a class="database-toolbar-pill" href="{{ url_for('view_tally_diagnostics', run_id=detail.link_guard.diagnostics_run_id) }}">{{ detail.link_guard.diagnostics_title or 'Open diagnostics' }}</a>
+        {% endif %}
+      </div>
+      <p class="empty-state">{{ detail.link_guard.message }}</p>
+    </article>
+  </section>
+
+  <section class="content-split">
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
           <p class="eyebrow">Actions</p>
           <h2>Move this package forward</h2>
         </div>
       </div>
       <div class="actions">
         <a class="primary-button" href="{{ url_for('download_tally_bridge_payload', run_id=detail.run.id) }}">Download payload</a>
-        {% if detail.run.profile and detail.run.profile.connection_mode in ['file_drop', 'hybrid'] %}
+        {% if detail.run.profile and detail.run.profile.connection_mode in ['file_drop', 'hybrid'] and detail.link_guard.status != 'blocked' %}
           <form action="{{ url_for('stage_tally_bridge_run_view', run_id=detail.run.id) }}" method="post">
             <button class="secondary-button" type="submit">Stage to profile target</button>
           </form>
@@ -72,7 +90,13 @@
       </div>
       <div class="delivery-run-empty">
         <span class="mini-chip">Source package</span>
-        <p class="empty-state">If your Tally setup is still manual today, download this payload and upload it exactly once from the Tally workstation. If the profile uses a watched folder, staging can drop the same payload into that target path.</p>
+        <p class="empty-state">
+          {% if detail.link_guard.status == 'blocked' %}
+            The bridge is holding this run because the latest diagnostics say the imported Tally chain breaks. Download is still available for inspection, but staging and downstream continuation stay blocked until diagnostics are fixed.
+          {% else %}
+            If your Tally setup is still manual today, download this payload and upload it exactly once from the Tally workstation. If the profile uses a watched folder, staging can drop the same payload into that target path.
+          {% endif %}
+        </p>
       </div>
       {% if detail.run.register_filename %}
         <div class="delivery-run-empty">
@@ -87,9 +111,6 @@
         </div>
       {% endif %}
     </article>
-  </section>
-
-  <section class="content-split">
     <article class="glass-card">
       <div class="module-head compact">
         <div>
@@ -164,16 +185,29 @@
           <h2>Bring the Tally result back into the bridge</h2>
         </div>
       </div>
-      <p class="page-copy">Upload the returned Tally register here and the bridge will create the linked SKU Automator run automatically. This keeps the outbound and inbound evidence on the same bridge record.</p>
-      <form class="form-stack" action="{{ url_for('upload_tally_bridge_register', run_id=detail.run.id) }}" method="post" enctype="multipart/form-data">
-        <label class="file-field">
-          <span class="field-label">Returned Tally register</span>
-          <input name="register_file" type="file" accept=".xlsx,.xls,.csv,.tsv,.txt" required>
-        </label>
-        <div class="actions">
-          <button class="primary-button" type="submit">Import register into bridge</button>
+      <p class="page-copy">
+        {% if detail.link_guard.status == 'blocked' %}
+          The bridge is not allowing the returned register to continue into SKU Automator because the imported Tally chain is currently flagged as broken.
+        {% else %}
+          Upload the returned Tally register here and the bridge will create the linked SKU Automator run automatically. This keeps the outbound and inbound evidence on the same bridge record.
+        {% endif %}
+      </p>
+      {% if detail.link_guard.status == 'blocked' %}
+        <div class="delivery-run-empty">
+          <span class="mini-chip">Blocked by diagnostics</span>
+          <p class="empty-state">{{ detail.link_guard.message }}</p>
         </div>
-      </form>
+      {% else %}
+        <form class="form-stack" action="{{ url_for('upload_tally_bridge_register', run_id=detail.run.id) }}" method="post" enctype="multipart/form-data">
+          <label class="file-field">
+            <span class="field-label">Returned Tally register</span>
+            <input name="register_file" type="file" accept=".xlsx,.xls,.csv,.tsv,.txt" required>
+          </label>
+          <div class="actions">
+            <button class="primary-button" type="submit">Import register into bridge</button>
+          </div>
+        </form>
+      {% endif %}
     </article>
 
     <article class="glass-card">

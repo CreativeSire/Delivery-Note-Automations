@@ -147,6 +147,16 @@ class TallyBridgeRunDetail:
     payload_exists: bool
     staged_exists: bool
     register_exists: bool
+    link_guard: "TallyBridgeLinkGuard"
+
+
+@dataclass
+class TallyBridgeLinkGuard:
+    status: str
+    title: str
+    message: str
+    diagnostics_run_id: str | None
+    diagnostics_title: str | None
 
 
 def build_tally_bridge_summary() -> TallyBridgeSummary:
@@ -237,12 +247,14 @@ def build_tally_bridge_run_detail(run_id: str) -> TallyBridgeRunDetail | None:
         return None
     payload_path = Path(run.payload_storage_path)
     staged_path = Path(run.staged_storage_path) if run.staged_storage_path else None
+    link_guard = resolve_tally_bridge_link_guard(run.profile_id)
     return TallyBridgeRunDetail(
         run=run,
         recommended_mode_label=_mode_label(run.bridge_mode),
         payload_exists=payload_path.exists(),
         staged_exists=bool(staged_path and staged_path.exists()),
         register_exists=bool(run.register_storage_path and Path(run.register_storage_path).exists()),
+        link_guard=link_guard,
     )
 
 
@@ -402,6 +414,7 @@ def create_tally_bridge_run_from_sales_order(
 
     profile = db.session.get(TallyBridgeProfile, profile_id) if profile_id else _resolve_profile(None)
     bridge_mode = profile.connection_mode if profile is not None else "manual_fallback"
+    link_guard = resolve_tally_bridge_link_guard(profile.id if profile is not None else None)
 
     try:
         payload_filename, payload = export_sales_order_run_to_workbook(sales_order_run_id)
@@ -418,13 +431,14 @@ def create_tally_bridge_run_from_sales_order(
         id=run_id,
         profile_id=profile.id if profile is not None else None,
         sales_order_run_id=sales_order_run.id,
-        status="ready_to_send",
+        status="needs_attention" if link_guard.status == "blocked" else "ready_to_send",
         bridge_mode=bridge_mode,
         payload_filename=payload_filename,
         payload_storage_path=str(payload_path),
         payload_content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         rows_ready=sales_order_run.rows_ready,
         notes=_nullable_text(notes),
+        error_message=link_guard.message if link_guard.status == "blocked" else None,
     )
     db.session.add(run)
     db.session.commit()
@@ -455,6 +469,7 @@ def stage_tally_bridge_run_to_profile_target(run_id: str) -> TallyBridgeRun:
     run = db.session.get(TallyBridgeRun, run_id)
     if run is None:
         raise ServiceError("This Tally Bridge run could not be found.")
+    assert_tally_bridge_link_guard(run, action_label="stage this payload for Tally")
     if run.profile is None:
         raise ServiceError("Link this run to a Tally profile before staging it.")
     destination = _nullable_text(run.profile.endpoint_url)
@@ -485,6 +500,7 @@ def import_tally_register_for_bridge_run(run_id: str, *, file_storage: object) -
     run = db.session.get(TallyBridgeRun, run_id)
     if run is None:
         raise ServiceError("This Tally Bridge run could not be found.")
+    assert_tally_bridge_link_guard(run, action_label="continue into SKU Automator")
 
     filename = _string_value(getattr(file_storage, "filename", ""))
     if not filename:
@@ -548,6 +564,73 @@ def build_tally_link_integrity_summary(artifacts: list[TallyDiagnosticsArtifact]
     )
 
 
+def resolve_tally_bridge_link_guard(profile_id: int | None) -> TallyBridgeLinkGuard:
+    diagnostics_run = _latest_relevant_diagnostics_run(profile_id)
+    if diagnostics_run is None:
+        return TallyBridgeLinkGuard(
+            status="warning",
+            title="No chain diagnostics yet",
+            message="No Tally diagnostics run has been recorded for this profile yet. The bridge can still prepare the payload, but chain integrity is not proven.",
+            diagnostics_run_id=None,
+            diagnostics_title=None,
+        )
+
+    if diagnostics_run.status != "bridge_mode_decided":
+        return TallyBridgeLinkGuard(
+            status="warning",
+            title="Diagnostics still open",
+            message="The latest Tally diagnostics run has not been finalized yet. Review the evidence before relying on this bridge path.",
+            diagnostics_run_id=diagnostics_run.id,
+            diagnostics_title=diagnostics_run.title,
+        )
+
+    detail = build_tally_diagnostics_detail(diagnostics_run.id)
+    if detail is None:
+        return TallyBridgeLinkGuard(
+            status="warning",
+            title="Diagnostics unavailable",
+            message="The bridge could not load the latest Tally diagnostics detail, so chain integrity is not verified.",
+            diagnostics_run_id=diagnostics_run.id,
+            diagnostics_title=diagnostics_run.title,
+        )
+
+    if diagnostics_run.dn_link_supported == "no" or detail.link_integrity.upload_case.status == "broken":
+        return TallyBridgeLinkGuard(
+            status="blocked",
+            title="Imported chain is broken",
+            message=detail.link_integrity.comparison_verdict,
+            diagnostics_run_id=diagnostics_run.id,
+            diagnostics_title=diagnostics_run.title,
+        )
+
+    if detail.link_integrity.upload_case.status == "linked" and diagnostics_run.dn_link_supported == "yes":
+        return TallyBridgeLinkGuard(
+            status="clear",
+            title="Imported chain verified",
+            message=detail.link_integrity.comparison_verdict,
+            diagnostics_run_id=diagnostics_run.id,
+            diagnostics_title=diagnostics_run.title,
+        )
+
+    return TallyBridgeLinkGuard(
+        status="warning",
+        title="Chain proof is incomplete",
+        message=detail.link_integrity.comparison_verdict,
+        diagnostics_run_id=diagnostics_run.id,
+        diagnostics_title=diagnostics_run.title,
+    )
+
+
+def assert_tally_bridge_link_guard(run: TallyBridgeRun, *, action_label: str) -> None:
+    guard = resolve_tally_bridge_link_guard(run.profile_id)
+    if guard.status != "blocked":
+        return
+    raise ServiceError(
+        f"Stop before you {action_label}. {guard.message}"
+        + (f" Review diagnostics run '{guard.diagnostics_title}' first." if guard.diagnostics_title else "")
+    )
+
+
 def derive_tally_bridge_mode(run: TallyDiagnosticsRun) -> str:
     if (
         run.xml_http_supported == "yes"
@@ -561,6 +644,19 @@ def derive_tally_bridge_mode(run: TallyDiagnosticsRun) -> str:
     if run.outbound_import_supported == "yes":
         return "file_drop"
     return "manual_fallback"
+
+
+def _latest_relevant_diagnostics_run(profile_id: int | None) -> TallyDiagnosticsRun | None:
+    query = select(TallyDiagnosticsRun)
+    if profile_id is not None:
+        query = query.where(TallyDiagnosticsRun.profile_id == profile_id)
+    query = query.order_by(TallyDiagnosticsRun.completed_at.desc(), TallyDiagnosticsRun.created_at.desc())
+    run = db.session.scalar(query.limit(1))
+    if run is not None or profile_id is None:
+        return run
+    return db.session.scalar(
+        select(TallyDiagnosticsRun).order_by(TallyDiagnosticsRun.completed_at.desc(), TallyDiagnosticsRun.created_at.desc()).limit(1)
+    )
 
 
 def _resolve_profile(raw_profile_id: str | None) -> TallyBridgeProfile | None:
