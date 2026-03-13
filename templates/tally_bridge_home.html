@@ -3,6 +3,7 @@
 {% block title %}Tally Bridge | DALA OPERATIONS{% endblock %}
 
 {% block content %}
+  {% set active_profile_caps = summary.active_profile.capabilities_json if summary.active_profile and summary.active_profile.capabilities_json else {} %}
   <section class="hero-band">
     <div>
       <p class="eyebrow">Tally Bridge</p>
@@ -87,12 +88,27 @@
           <span class="metric-label">Endpoint / machine</span>
           <strong>{{ summary.active_profile.endpoint_url or summary.active_profile.machine_name if summary.active_profile else 'Not recorded yet' }}</strong>
         </div>
+        <div class="meter">
+          <span class="metric-label">Last probe</span>
+          <strong>
+            {% if active_profile_caps.get('probe_status') == 'success' %}
+              XML / HTTP reachable
+            {% elif active_profile_caps.get('probe_status') %}
+              {{ active_profile_caps.get('probe_status', 'Unknown') | replace('_', ' ') | title }}
+            {% else %}
+              Not checked yet
+            {% endif %}
+          </strong>
+        </div>
       </div>
       {% if summary.latest_run %}
         <div class="chip-row">
           <span class="database-toolbar-pill is-active">Latest run {{ summary.latest_run.status.replace('_', ' ') }}</span>
           <span class="database-toolbar-pill">Recommendation {{ summary.latest_run.recommended_mode.replace('_', ' ').title() if summary.latest_run.recommended_mode else 'Pending' }}</span>
         </div>
+      {% endif %}
+      {% if active_profile_caps.get('probe_message') %}
+        <p class="page-copy">{{ active_profile_caps.get('probe_message') }}</p>
       {% endif %}
     </article>
 
@@ -108,7 +124,7 @@
           <input type="hidden" name="profile_id" value="{{ summary.active_profile.id }}">
         {% endif %}
         <input type="hidden" name="is_active" value="yes">
-        {% set profile_caps = summary.active_profile.capabilities_json if summary.active_profile and summary.active_profile.capabilities_json else {} %}
+        {% set profile_caps = active_profile_caps %}
         <label class="field">
           <span class="field-label">Profile name</span>
           <input name="name" type="text" value="{{ summary.active_profile.name if summary.active_profile else '' }}" placeholder="Main warehouse Tally" required>
@@ -175,6 +191,11 @@
           <button class="primary-button" type="submit">Save Tally profile</button>
         </div>
       </form>
+      {% if summary.active_profile %}
+        <form class="inline-form" action="{{ url_for('probe_tally_bridge_profile_view', profile_id=summary.active_profile.id) }}" method="post">
+          <button class="secondary-button" type="submit">Run XML / HTTP probe</button>
+        </form>
+      {% endif %}
     </article>
   </section>
 

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import html
 import re
 from shutil import copy2
 from io import BytesIO
 import mimetypes
 from pathlib import Path
+from urllib import error as urlerror
+from urllib import request as urlrequest
 from uuid import uuid4
 
 from flask import current_app
@@ -340,7 +343,9 @@ def save_tally_bridge_profile(values: dict[str, str], *, profile_id: int | None 
     profile.notes = _nullable_text(values.get("notes"))
     profile.is_active = is_active
 
+    existing_capabilities = dict(profile.capabilities_json or {})
     profile.capabilities_json = {
+        **existing_capabilities,
         "xml_http": _choice_value(values.get("profile_xml_http"), YES_NO_UNKNOWN_OPTIONS, "unknown"),
         "outbound_import": _choice_value(values.get("profile_outbound_import"), YES_NO_UNKNOWN_OPTIONS, "unknown"),
         "register_fetch": _choice_value(values.get("profile_register_fetch"), YES_NO_UNKNOWN_OPTIONS, "unknown"),
@@ -353,6 +358,67 @@ def save_tally_bridge_profile(values: dict[str, str], *, profile_id: int | None 
             {"is_active": False}, synchronize_session=False
         )
 
+    db.session.commit()
+    return profile
+
+
+def probe_tally_bridge_profile(profile_id: int) -> TallyBridgeProfile:
+    profile = db.session.get(TallyBridgeProfile, profile_id)
+    if profile is None:
+        raise ServiceError("This Tally Bridge profile could not be found.")
+
+    endpoint = _nullable_text(profile.endpoint_url)
+    if not endpoint:
+        raise ServiceError("Add the Tally XML / HTTP endpoint first.")
+    if not endpoint.lower().startswith(("http://", "https://")):
+        raise ServiceError("The Tally XML / HTTP probe needs an http:// or https:// endpoint.")
+
+    payload = _build_tally_probe_envelope(profile.company_name)
+    request = urlrequest.Request(
+        endpoint,
+        data=payload.encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "text/xml; charset=utf-8",
+            "Accept": "text/xml, application/xml",
+            "User-Agent": "DALA-Tally-Bridge/1.0",
+        },
+    )
+    checked_at = utcnow()
+    capabilities = dict(profile.capabilities_json or {})
+
+    try:
+        with urlrequest.urlopen(request, timeout=12) as response:
+            response_bytes = response.read(4096)
+            http_status = response.getcode() or 200
+        response_text = response_bytes.decode("utf-8", errors="replace")
+        xml_ok = _looks_like_tally_xml_response(response_text)
+        capabilities["xml_http"] = "yes" if xml_ok else capabilities.get("xml_http", "unknown")
+        capabilities["probe_status"] = "success" if xml_ok else "unexpected_response"
+        capabilities["probe_http_status"] = http_status
+        capabilities["probe_message"] = (
+            "Tally XML / HTTP endpoint responded with a Tally-style XML envelope."
+            if xml_ok
+            else "Endpoint responded, but the payload did not look like a Tally XML response."
+        )
+        capabilities["probe_excerpt"] = _compact_probe_excerpt(response_text)
+    except urlerror.HTTPError as exc:
+        response_text = exc.read(4096).decode("utf-8", errors="replace")
+        capabilities["xml_http"] = "no"
+        capabilities["probe_status"] = "http_error"
+        capabilities["probe_http_status"] = exc.code
+        capabilities["probe_message"] = f"HTTP {exc.code} returned from the configured Tally endpoint."
+        capabilities["probe_excerpt"] = _compact_probe_excerpt(response_text)
+    except urlerror.URLError as exc:
+        capabilities["xml_http"] = "no"
+        capabilities["probe_status"] = "connection_error"
+        capabilities["probe_http_status"] = None
+        capabilities["probe_message"] = f"Could not reach the configured Tally endpoint: {exc.reason}"
+        capabilities["probe_excerpt"] = ""
+
+    capabilities["probe_checked_at"] = checked_at.isoformat()
+    profile.capabilities_json = capabilities
+    profile.last_checked_at = checked_at
     db.session.commit()
     return profile
 
@@ -850,6 +916,44 @@ def _resolve_profile(raw_profile_id: str | None) -> TallyBridgeProfile | None:
     if active_profile is not None:
         return active_profile
     return db.session.scalar(select(TallyBridgeProfile).order_by(TallyBridgeProfile.id.asc()).limit(1))
+
+
+def _build_tally_probe_envelope(company_name: str | None) -> str:
+    company_xml = ""
+    if company_name:
+        company_xml = f"<SVCURRENTCOMPANY>{html.escape(company_name)}</SVCURRENTCOMPANY>"
+    return (
+        "<ENVELOPE>"
+        "<HEADER>"
+        "<VERSION>1</VERSION>"
+        "<TALLYREQUEST>Export</TALLYREQUEST>"
+        "<TYPE>Data</TYPE>"
+        "<ID>List of Companies</ID>"
+        "</HEADER>"
+        "<BODY>"
+        "<DESC>"
+        "<STATICVARIABLES>"
+        "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
+        f"{company_xml}"
+        "</STATICVARIABLES>"
+        "</DESC>"
+        "</BODY>"
+        "</ENVELOPE>"
+    )
+
+
+def _looks_like_tally_xml_response(payload: str) -> bool:
+    normalized = payload.strip().lower()
+    if not normalized:
+        return False
+    if "<envelope" not in normalized or "<body>" not in normalized:
+        return False
+    return any(marker in normalized for marker in ("<tallymessage", "<company", "<collection", "<lineerror"))
+
+
+def _compact_probe_excerpt(payload: str) -> str:
+    compact = re.sub(r"\s+", " ", payload).strip()
+    return compact[:400]
 
 
 def _nullable_text(value: object) -> str | None:

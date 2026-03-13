@@ -109,6 +109,7 @@ from tally_bridge_services import (
     get_tally_bridge_run,
     get_tally_diagnostics_artifact,
     import_tally_register_for_bridge_run,
+    probe_tally_bridge_profile,
     pull_tally_register_from_profile_target,
     save_tally_bridge_profile,
     stage_tally_bridge_run_to_profile_target,
@@ -270,6 +271,35 @@ def create_app(test_config: dict | None = None) -> Flask:
         )
         db.session.commit()
         flash(f"Tally Bridge profile '{profile.name}' was saved.", "success")
+        return redirect(url_for("tally_bridge_home"))
+
+    @app.post("/tally-bridge/profile/<int:profile_id>/probe")
+    def probe_tally_bridge_profile_view(profile_id: int) -> str:
+        try:
+            profile = probe_tally_bridge_profile(profile_id)
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("tally_bridge_home"))
+
+        capabilities = profile.capabilities_json or {}
+        record_audit_event(
+            module_name="Tally Bridge",
+            event_type="profile_probed",
+            entity_type="tally_profile",
+            entity_id=str(profile.id),
+            entity_name=profile.name,
+            summary_text=f"Ran XML / HTTP probe for Tally profile '{profile.name}'.",
+            details={
+                "probe_status": capabilities.get("probe_status", ""),
+                "probe_http_status": capabilities.get("probe_http_status", ""),
+                "probe_message": capabilities.get("probe_message", ""),
+            },
+        )
+        db.session.commit()
+        if capabilities.get("probe_status") == "success":
+            flash("Tally endpoint probe succeeded.", "success")
+        else:
+            flash(capabilities.get("probe_message") or "Tally endpoint probe completed with warnings.", "warning")
         return redirect(url_for("tally_bridge_home"))
 
     @app.post("/tally-bridge/diagnostics")

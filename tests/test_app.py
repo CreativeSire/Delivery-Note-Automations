@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
 from sqlalchemy.dialects import postgresql
@@ -361,6 +362,69 @@ def test_tally_bridge_profile_and_diagnostics_flow() -> None:
         assert download.data == b"<ENVELOPE>linked</ENVELOPE>"
 
         with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_tally_bridge_profile_can_run_xml_http_probe() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        save_profile = client.post(
+            "/tally-bridge/profile",
+            data={
+                "name": "XML Probe Tally",
+                "connection_mode": "xml_http",
+                "company_name": "DALA HQ",
+                "endpoint_url": "http://127.0.0.1:9000",
+                "profile_xml_http": "unknown",
+                "profile_outbound_import": "unknown",
+                "profile_register_fetch": "unknown",
+            },
+            follow_redirects=False,
+        )
+        assert save_profile.status_code == 302
+
+        with app.app_context():
+            profile = db.session.query(TallyBridgeProfile).one()
+            profile_id = profile.id
+
+        class FakeProbeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self, size: int = -1) -> bytes:
+                return b"<ENVELOPE><BODY><DATA><COLLECTION><COMPANY>DALA HQ</COMPANY></COLLECTION></DATA></BODY></ENVELOPE>"
+
+            def getcode(self) -> int:
+                return 200
+
+        with patch("tally_bridge_services.urlrequest.urlopen", return_value=FakeProbeResponse()) as mock_urlopen:
+            response = client.post(f"/tally-bridge/profile/{profile_id}/probe", follow_redirects=True)
+
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "Tally endpoint probe succeeded." in html
+        assert mock_urlopen.called
+
+        with app.app_context():
+            profile = db.session.get(TallyBridgeProfile, profile_id)
+            assert profile is not None
+            assert profile.capabilities_json["xml_http"] == "yes"
+            assert profile.capabilities_json["probe_status"] == "success"
+            assert profile.capabilities_json["probe_http_status"] == 200
+            assert "Tally-style XML envelope" in profile.capabilities_json["probe_message"]
+            assert profile.last_checked_at is not None
             db.session.remove()
             db.engine.dispose()
 
