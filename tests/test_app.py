@@ -6,6 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from openpyxl import Workbook, load_workbook
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.sql import sqltypes
 
 from app import _database_uri, create_app
 from loading_tracker_services import create_loading_tracker_import_job, run_loading_tracker_import_job
@@ -34,6 +36,7 @@ from models import (
     TallyDiagnosticsRun,
     UomImportReview,
     UploadRun,
+    _compile_runtime_column_type,
     db,
 )
 from services import bootstrap_seed_uom_if_empty
@@ -1209,6 +1212,14 @@ def test_database_url_uses_psycopg_driver(monkeypatch) -> None:
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com:5432/delivery")
     assert _database_uri("unused") == "postgresql+psycopg://user:pass@db.example.com:5432/delivery"
+
+
+def test_runtime_schema_datetime_compiles_for_postgres() -> None:
+    timestamp_type = _compile_runtime_column_type(
+        sqltypes.DateTime(timezone=True),
+        postgresql.dialect(),
+    )
+    assert timestamp_type == "TIMESTAMP WITH TIME ZONE"
 
 
 def test_uom_import_sets_active_source_of_truth() -> None:

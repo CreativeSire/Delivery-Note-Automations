@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import inspect, text
+from sqlalchemy.sql import sqltypes
 
 db = SQLAlchemy()
 
@@ -667,9 +668,15 @@ RUNTIME_SCHEMA_UPDATES = {
         "register_filename": "VARCHAR(255)",
         "register_storage_path": "VARCHAR(512)",
         "register_content_type": "VARCHAR(255)",
-        "register_received_at": "DATETIME",
+        "register_received_at": sqltypes.DateTime(timezone=True),
     },
 }
+
+
+def _compile_runtime_column_type(column_type: str | sqltypes.TypeEngine, dialect) -> str:
+    if isinstance(column_type, str):
+        return column_type
+    return column_type.compile(dialect=dialect)
 
 
 def ensure_runtime_schema(engine) -> None:
@@ -683,7 +690,8 @@ def ensure_runtime_schema(engine) -> None:
             for column_name, column_type in columns.items():
                 if column_name in existing_columns:
                     continue
-                connection.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {column_type}'))
+                compiled_type = _compile_runtime_column_type(column_type, connection.dialect)
+                connection.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {compiled_type}'))
 
 
 class LoadingTrackerInventoryItem(db.Model):
