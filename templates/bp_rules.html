@@ -7,7 +7,7 @@
     <div>
       <p class="eyebrow">Database · Brand Partner rules</p>
       <h1>Control which SKU and store combinations route to Brand Partner ownership.</h1>
-      <p class="page-copy">Keep BP ownership logic explicit here, test it before it reaches Sales Order or Delivery Note, and let the system derive <code>BPVT-</code> or <code>BPNV-</code> from the product VAT truth.</p>
+      <p class="page-copy">Keep BP ownership logic explicit here, test it before it reaches Sales Order or Delivery Note, and let the system tag matching rows with <code>BP-</code> while still preserving VAT truth internally.</p>
     </div>
     <div class="actions">
       <a class="secondary-button" href="{{ url_for('product_master') }}">Back to Database</a>

@@ -221,7 +221,7 @@
         <a class="secondary-button" href="{{ url_for('brand_partner_rules_home') }}">Open rules workspace</a>
       </div>
 
-      <p class="page-copy database-form-copy">Use these rules when a SKU should route to Brand Partner ownership for a specific store or for every store. The system then combines that with product VAT truth to create <code>BPVT-</code> or <code>BPNV-</code>.</p>
+      <p class="page-copy database-form-copy">Use these rules when a SKU should route to Brand Partner ownership for a specific store or for every store. Matching rows get a <code>BP-</code> reference while VAT truth stays attached to the row.</p>
 
       <form class="form-stack" action="{{ url_for('create_brand_partner_rule') }}" method="post">
         <input type="hidden" name="q" value="{{ search_query }}">

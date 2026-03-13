@@ -68,8 +68,8 @@ VAT_RATE = Decimal("7.5")
 CASE_UNITS = {"case", "cases", "ctn", "carton", "cartons"}
 SALES_ORDER_CATEGORY_COLORS = {
     "BP": {"row_fill": "FFF5E3", "key_fill": "FFC28A25", "key_font": "FFFDF7"},
-    "BPVT": {"row_fill": "FFF7E5", "key_fill": "FFD39A22", "key_font": "FFFDF7"},
-    "BPNV": {"row_fill": "FFF4EAF2", "key_fill": "FF9B5B85", "key_font": "FFFFFFFF"},
+    "BPVT": {"row_fill": "FFF5E3", "key_fill": "FFC28A25", "key_font": "FFFDF7"},
+    "BPNV": {"row_fill": "FFF5E3", "key_fill": "FFC28A25", "key_font": "FFFDF7"},
     "VT": {"row_fill": "E4F7F9", "key_fill": "FF0A7787", "key_font": "FFFFFFFF"},
     "NV": {"row_fill": "F7EEF4", "key_fill": "FF8A5C78", "key_font": "FFFFFFFF"},
 }
@@ -440,10 +440,11 @@ def export_sales_order_run_to_workbook(run_id: str) -> tuple[str, bytes]:
     _write_styled_header(sheet, SALES_ORDER_HEADERS)
     sheet.column_dimensions["A"].width = max(sheet.column_dimensions["A"].width or 0, 16)
     for line in lines:
+        display_reference = _display_order_reference(line.invoice_category, line.raw_reference_no, line.order_number)
         sheet.append(
             [
                 _excel_date_value(line.invoice_date),
-                line.prefixed_reference_no or line.raw_reference_no or line.order_number,
+                display_reference,
                 VOUCHER_TYPE_NAME,
                 line.retailer_name,
                 line.resolved_sku_name,
@@ -491,7 +492,11 @@ def build_sku_automator_matrix(run_id: str) -> tuple[list[str], list[SkuMatrixRo
                 total_quantity=Decimal("0"),
             )
         row = stores[store_key]
-        display_reference = line.prefixed_reference_no or line.order_reference_no
+        display_reference = _display_order_reference(
+            line.invoice_category,
+            line.raw_reference_no,
+            line.order_reference_no,
+        )
         if display_reference and display_reference not in row.order_references:
             row.order_references.append(display_reference)
         quantity = line.resolved_quantity or Decimal("0")
@@ -525,6 +530,11 @@ def export_sku_automator_run_to_workbook(run_id: str) -> tuple[str, bytes]:
     register.title = TALLY_REGISTER_SOURCE_SHEET
     _write_styled_header(register, SKU_REGISTER_HEADERS)
     for line in lines:
+        display_reference = _display_order_reference(
+            line.invoice_category,
+            line.raw_reference_no,
+            line.order_reference_no,
+        )
         register.append(
             [
                 _excel_date_value(line.order_date),
@@ -533,7 +543,7 @@ def export_sku_automator_run_to_workbook(run_id: str) -> tuple[str, bytes]:
                 float(line.resolved_quantity or 0),
                 float(line.resolved_rate or 0),
                 float(line.source_value),
-                line.prefixed_reference_no or line.order_reference_no or "",
+                display_reference,
                 line.voucher_no or "",
             ]
         )
@@ -927,6 +937,17 @@ def _apply_sales_order_category_style(sheet: Any, row_index: int, invoice_catego
     order_cell = sheet.cell(row_index, 2)
     order_cell.fill = key_fill
     order_cell.font = key_font
+
+
+def _display_order_reference(
+    invoice_category: str | None,
+    raw_reference_no: str | None,
+    fallback_reference: str | None,
+) -> str:
+    normalized_reference = build_prefixed_reference(invoice_category, raw_reference_no)
+    if normalized_reference:
+        return normalized_reference
+    return raw_reference_no or fallback_reference or ""
 
 
 def _save_workbook(workbook: Workbook) -> bytes:

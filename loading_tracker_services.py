@@ -1802,7 +1802,9 @@ def _serialize_row(row: LoadingTrackerRow) -> dict[str, Any]:
             "tax_bucket": item.tax_bucket or "",
             "invoice_category": item.invoice_category or "",
             "raw_reference_no": item.raw_reference_no or "",
-            "prefixed_reference_no": item.prefixed_reference_no or "",
+            "prefixed_reference_no": build_prefixed_reference(item.invoice_category, item.raw_reference_no)
+            or item.prefixed_reference_no
+            or "",
             "classification_source": item.classification_source or "",
             "bp_rule_reason": item.bp_rule_reason or "",
         }
@@ -1885,14 +1887,23 @@ def _group_sku_automator_store_rows(lines: list[SkuAutomatorLine]) -> list[dict[
         if line.order_date and (not entry["delivery_date"] or str(line.order_date) < str(entry["delivery_date"])):
             entry["delivery_date"] = line.order_date
         if line.order_reference_no:
-            entry["order_references"].add(line.prefixed_reference_no or line.order_reference_no)
+            entry["order_references"].add(
+                build_prefixed_reference(line.invoice_category, line.raw_reference_no)
+                or line.prefixed_reference_no
+                or line.order_reference_no
+            )
         sku_name = line.resolved_sku_name or line.source_sku
         quantity = _float_value(line.resolved_quantity)
         if quantity > 0:
+            normalized_prefixed_reference = (
+                build_prefixed_reference(line.invoice_category, line.raw_reference_no)
+                or line.prefixed_reference_no
+                or ""
+            )
             item_key = (
                 sku_name,
                 line.invoice_category or "",
-                line.prefixed_reference_no or "",
+                normalized_prefixed_reference,
                 line.raw_reference_no or "",
             )
             item_entry = entry["items"].setdefault(
@@ -1903,7 +1914,7 @@ def _group_sku_automator_store_rows(lines: list[SkuAutomatorLine]) -> list[dict[
                     "invoice_owner": line.invoice_owner or "",
                     "tax_bucket": line.tax_bucket or "",
                     "invoice_category": line.invoice_category or "",
-                    "prefixed_reference_no": line.prefixed_reference_no or "",
+                    "prefixed_reference_no": normalized_prefixed_reference,
                     "raw_reference_no": line.raw_reference_no or "",
                     "classification_source": line.classification_source or "",
                     "bp_rule_reason": line.bp_rule_reason or "",
@@ -2057,10 +2068,10 @@ def _row_items_text(row: LoadingTrackerRow | None) -> str:
             continue
         line = f"{item.sku_name} = {quantity:g}"
         item_category, _, _ = invoice_category_parts(item.invoice_category)
-        reference = item.prefixed_reference_no or build_prefixed_reference(
+        reference = build_prefixed_reference(
             item_category or item.invoice_category,
             item.raw_reference_no,
-        )
+        ) or item.prefixed_reference_no
         if reference:
             line += f" | {reference}"
         items.append(line)

@@ -2607,14 +2607,14 @@ h3 {
 
 .invoice-pill-bpvt {
   background: rgba(205, 161, 77, 0.18);
-  color: #8f5f17;
+  color: #966117;
   box-shadow: inset 0 0 0 1px rgba(205, 161, 77, 0.2);
 }
 
 .invoice-pill-bpnv {
-  background: rgba(138, 92, 120, 0.16);
-  color: #7b4767;
-  box-shadow: inset 0 0 0 1px rgba(138, 92, 120, 0.18);
+  background: rgba(205, 161, 77, 0.18);
+  color: #966117;
+  box-shadow: inset 0 0 0 1px rgba(205, 161, 77, 0.2);
 }
 
 .invoice-pill-vt {
@@ -2645,13 +2645,13 @@ h3 {
 }
 
 .invoice-button-bpvt {
-  background: linear-gradient(135deg, #d4a548, #ba7f1f);
+  background: linear-gradient(135deg, #cfa14b, #b47e24);
   color: #fffdf7;
 }
 
 .invoice-button-bpnv {
-  background: linear-gradient(135deg, #915f7f, #71425f);
-  color: #ffffff;
+  background: linear-gradient(135deg, #cfa14b, #b47e24);
+  color: #fffdf7;
 }
 
 .invoice-button-vt {

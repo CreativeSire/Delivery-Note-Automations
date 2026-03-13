@@ -625,10 +625,9 @@ def test_end_to_end_review_and_alias_memory() -> None:
         assert response.status_code == 200
         html = response.get_data(as_text=True)
         assert "rows are now ready for export" in html
+        assert "Download BP" not in html
         assert "Download VT" in html
         assert "Download NV" in html
-        assert "Download BPVT" not in html
-        assert "Download BPNV" not in html
 
         download_vt = client.get(f"/runs/{run_id}/download?category=VT")
         assert download_vt.status_code == 200
@@ -1942,10 +1941,9 @@ def test_loading_tracker_counts_handoff_history_and_carry_forward() -> None:
         handoff_html = handoff.get_data(as_text=True)
         assert handoff.status_code == 200
         assert "final adjusted day plan has been handed off" in handoff_html
+        assert "Download BP" not in handoff_html
         assert "Download NV" in handoff_html
         assert "Download VT" not in handoff_html
-        assert "Download BPVT" not in handoff_html
-        assert "Download BPNV" not in handoff_html
 
         with app.app_context():
             upload_run = db.session.query(UploadRun).one()
@@ -2352,11 +2350,11 @@ def test_sales_order_run_splits_same_reference_into_bp_vt_and_nv_lines() -> None
         row3 = [output.cell(3, c).value for c in range(1, 13)]
         row4 = [output.cell(4, c).value for c in range(1, 13)]
 
-        assert row2[1] == "BPVT-17575653"
+        assert row2[1] == "BP-17575653"
         assert row2[4] == "SKU Alpha"
         assert row2[9] == "VAT"
-        assert output["A2"].fill.fgColor.rgb == "00FFF7E5"
-        assert output["B2"].fill.fgColor.rgb == "FFD39A22"
+        assert output["A2"].fill.fgColor.rgb == "00FFF5E3"
+        assert output["B2"].fill.fgColor.rgb == "FFC28A25"
 
         assert row3[1] == "VT-17575653"
         assert row3[4] == "SKU Beta"
@@ -2372,9 +2370,9 @@ def test_sales_order_run_splits_same_reference_into_bp_vt_and_nv_lines() -> None
 
         with app.app_context():
             lines = db.session.query(SalesOrderLine).filter_by(run_id=run_id).order_by(SalesOrderLine.id.asc()).all()
-            assert [line.invoice_category for line in lines] == ["BPVT", "VT", "NV"]
+            assert [line.invoice_category for line in lines] == ["BP", "VT", "NV"]
             assert [line.prefixed_reference_no for line in lines] == [
-                "BPVT-17575653",
+                "BP-17575653",
                 "VT-17575653",
                 "NV-17575653",
             ]
