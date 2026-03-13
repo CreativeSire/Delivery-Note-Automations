@@ -168,12 +168,16 @@ class TallyBridgeRun(db.Model):
     id = db.Column(db.String(32), primary_key=True)
     profile_id = db.Column(db.Integer, db.ForeignKey("tally_bridge_profile.id"), nullable=True, index=True)
     sales_order_run_id = db.Column(db.String(32), db.ForeignKey("sales_order_run.id"), nullable=False, index=True)
+    sku_automator_run_id = db.Column(db.String(32), db.ForeignKey("sku_automator_run.id"), nullable=True, index=True)
     status = db.Column(db.String(32), nullable=False, default="ready_to_send", index=True)
     bridge_mode = db.Column(db.String(32), nullable=False, default="manual_fallback")
     payload_filename = db.Column(db.String(255), nullable=False)
     payload_storage_path = db.Column(db.String(512), nullable=False)
     payload_content_type = db.Column(db.String(255), nullable=True)
     staged_storage_path = db.Column(db.String(512), nullable=True)
+    register_filename = db.Column(db.String(255), nullable=True)
+    register_storage_path = db.Column(db.String(512), nullable=True)
+    register_content_type = db.Column(db.String(255), nullable=True)
     rows_ready = db.Column(db.Integer, nullable=False, default=0)
     error_message = db.Column(db.Text, nullable=True)
     notes = db.Column(db.Text, nullable=True)
@@ -181,9 +185,11 @@ class TallyBridgeRun(db.Model):
     updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
     sent_at = db.Column(db.DateTime(timezone=True), nullable=True)
     confirmed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    register_received_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
     profile = db.relationship("TallyBridgeProfile")
     sales_order_run = db.relationship("SalesOrderRun")
+    sku_automator_run = db.relationship("SkuAutomatorRun")
 
 
 class AuditEvent(db.Model):
@@ -655,6 +661,13 @@ RUNTIME_SCHEMA_UPDATES = {
         "prefixed_reference_no": "VARCHAR(160)",
         "classification_source": "VARCHAR(64)",
         "bp_rule_reason": "VARCHAR(255)",
+    },
+    "tally_bridge_run": {
+        "sku_automator_run_id": "VARCHAR(32)",
+        "register_filename": "VARCHAR(255)",
+        "register_storage_path": "VARCHAR(512)",
+        "register_content_type": "VARCHAR(255)",
+        "register_received_at": "DATETIME",
     },
 }
 

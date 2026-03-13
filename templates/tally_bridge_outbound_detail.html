@@ -74,6 +74,18 @@
         <span class="mini-chip">Source package</span>
         <p class="empty-state">If your Tally setup is still manual today, download this payload and upload it exactly once from the Tally workstation. If the profile uses a watched folder, staging can drop the same payload into that target path.</p>
       </div>
+      {% if detail.run.register_filename %}
+        <div class="delivery-run-empty">
+          <span class="mini-chip">Register received</span>
+          <p class="empty-state">The returned Tally register is already attached to this bridge run and was used to open the linked SKU Automator run.</p>
+          <div class="actions">
+            <a class="secondary-button" href="{{ url_for('download_tally_bridge_register', run_id=detail.run.id) }}">Download register</a>
+            {% if detail.run.sku_automator_run %}
+              <a class="secondary-button" href="{{ url_for('view_sku_automator_run', run_id=detail.run.sku_automator_run.id) }}">Open SKU Automator run</a>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
     </article>
   </section>
 
@@ -134,7 +146,59 @@
             <small>{{ detail.run.confirmed_at.strftime('%Y-%m-%d %H:%M') if detail.run.confirmed_at else 'Not confirmed yet' }}</small>
           </div>
         </article>
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>Linked SKU Automator</strong>
+            <small>{{ detail.run.sku_automator_run.original_filename if detail.run.sku_automator_run else 'Not linked yet' }}</small>
+          </div>
+        </article>
       </div>
+    </article>
+  </section>
+
+  <section class="content-split">
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Inbound register</p>
+          <h2>Bring the Tally result back into the bridge</h2>
+        </div>
+      </div>
+      <p class="page-copy">Upload the returned Tally register here and the bridge will create the linked SKU Automator run automatically. This keeps the outbound and inbound evidence on the same bridge record.</p>
+      <form class="form-stack" action="{{ url_for('upload_tally_bridge_register', run_id=detail.run.id) }}" method="post" enctype="multipart/form-data">
+        <label class="file-field">
+          <span class="field-label">Returned Tally register</span>
+          <input name="register_file" type="file" accept=".xlsx,.xls,.csv,.tsv,.txt" required>
+        </label>
+        <div class="actions">
+          <button class="primary-button" type="submit">Import register into bridge</button>
+        </div>
+      </form>
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Linked downstream run</p>
+          <h2>SKU Automator handoff</h2>
+        </div>
+      </div>
+      {% if detail.run.sku_automator_run %}
+        <div class="delivery-run-empty">
+          <span class="mini-chip">{{ detail.run.sku_automator_run.status.replace('_', ' ') }}</span>
+          <h3>{{ detail.run.sku_automator_run.original_filename }}</h3>
+          <p class="empty-state">Rows ready: {{ detail.run.sku_automator_run.rows_ready }} · Review: {{ detail.run.sku_automator_run.rows_needing_review }} · Stores: {{ detail.run.sku_automator_run.store_count }}</p>
+          <div class="actions">
+            <a class="secondary-button" href="{{ url_for('view_sku_automator_run', run_id=detail.run.sku_automator_run.id) }}">Open SKU Automator run</a>
+          </div>
+        </div>
+      {% else %}
+        <div class="delivery-run-empty">
+          <span class="mini-chip">Awaiting register</span>
+          <h3>No SKU Automator run linked yet.</h3>
+          <p class="empty-state">As soon as the returned Tally register is uploaded here, the bridge will open the next downstream run automatically.</p>
+        </div>
+      {% endif %}
     </article>
   </section>
 {% endblock %}

@@ -2,16 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from shutil import copy2
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
 from flask import current_app
 from sqlalchemy import func, select
+from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
 from models import SalesOrderRun, TallyBridgeProfile, TallyBridgeRun, TallyDiagnosticsArtifact, TallyDiagnosticsRun, db, utcnow
 from services import ServiceError, _string_value
-from workflow_services import WorkflowError, export_sales_order_run_to_workbook
+from workflow_services import WorkflowError, create_sku_automator_run, export_sales_order_run_to_workbook
 
 CONNECTION_MODE_OPTIONS = [
     ("manual_fallback", "Manual fallback"),
@@ -49,6 +51,8 @@ BRIDGE_RUN_STATUS_OPTIONS = [
     ("staged_for_tally", "Staged for Tally"),
     ("sent_to_tally", "Sent to Tally"),
     ("confirmed_in_tally", "Confirmed in Tally"),
+    ("register_received", "Register received"),
+    ("linked_to_sku_automator", "Linked to SKU Automator"),
     ("needs_attention", "Needs attention"),
     ("failed", "Failed"),
 ]
@@ -107,6 +111,7 @@ class TallyBridgeRunDetail:
     recommended_mode_label: str
     payload_exists: bool
     staged_exists: bool
+    register_exists: bool
 
 
 def build_tally_bridge_summary() -> TallyBridgeSummary:
@@ -200,6 +205,7 @@ def build_tally_bridge_run_detail(run_id: str) -> TallyBridgeRunDetail | None:
         recommended_mode_label=_mode_label(run.bridge_mode),
         payload_exists=payload_path.exists(),
         staged_exists=bool(staged_path and staged_path.exists()),
+        register_exists=bool(run.register_storage_path and Path(run.register_storage_path).exists()),
     )
 
 
@@ -433,6 +439,47 @@ def stage_tally_bridge_run_to_profile_target(run_id: str) -> TallyBridgeRun:
     run.staged_storage_path = str(staged_path)
     run.status = "staged_for_tally"
     run.sent_at = utcnow()
+    run.error_message = None
+    db.session.commit()
+    return run
+
+
+def import_tally_register_for_bridge_run(run_id: str, *, file_storage: object) -> TallyBridgeRun:
+    run = db.session.get(TallyBridgeRun, run_id)
+    if run is None:
+        raise ServiceError("This Tally Bridge run could not be found.")
+
+    filename = _string_value(getattr(file_storage, "filename", ""))
+    if not filename:
+        raise ServiceError("Please choose the returned Tally register file first.")
+
+    payload = file_storage.read()
+    if hasattr(file_storage, "stream"):
+        file_storage.stream.seek(0)
+    if not payload:
+        raise ServiceError("The returned Tally register file is empty.")
+
+    target_dir = _bridge_storage_dir("registers", run.id)
+    safe_name = secure_filename(filename) or f"register-{run.id}.xlsx"
+    register_path = target_dir / f"{uuid4().hex}-{safe_name}"
+    register_path.write_bytes(payload)
+
+    inbound_upload = FileStorage(
+        stream=BytesIO(payload),
+        filename=filename,
+        content_type=_string_value(getattr(file_storage, "mimetype", "")) or None,
+    )
+    try:
+        sku_run = create_sku_automator_run(inbound_upload)
+    except WorkflowError as exc:
+        raise ServiceError(str(exc)) from exc
+
+    run.register_filename = filename
+    run.register_storage_path = str(register_path)
+    run.register_content_type = inbound_upload.content_type
+    run.register_received_at = utcnow()
+    run.sku_automator_run_id = sku_run.id
+    run.status = "linked_to_sku_automator"
     run.error_message = None
     db.session.commit()
     return run

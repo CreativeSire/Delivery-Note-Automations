@@ -108,6 +108,7 @@ from tally_bridge_services import (
     create_tally_diagnostics_run,
     get_tally_bridge_run,
     get_tally_diagnostics_artifact,
+    import_tally_register_for_bridge_run,
     save_tally_bridge_profile,
     stage_tally_bridge_run_to_profile_target,
     update_tally_bridge_run_status,
@@ -488,6 +489,47 @@ def create_app(test_config: dict | None = None) -> Flask:
         if not path.exists():
             abort(404)
         return send_file(path, as_attachment=True, download_name=run.payload_filename, mimetype=run.payload_content_type)
+
+    @app.post("/tally-bridge/runs/<run_id>/register")
+    def upload_tally_bridge_register(run_id: str) -> str:
+        uploaded_file = request.files.get("register_file")
+        if uploaded_file is None or uploaded_file.filename == "":
+            flash("Please choose the returned Tally register first.", "error")
+            return redirect(url_for("view_tally_bridge_run", run_id=run_id))
+
+        try:
+            run = import_tally_register_for_bridge_run(run_id, file_storage=uploaded_file)
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("view_tally_bridge_run", run_id=run_id))
+
+        sku_run = run.sku_automator_run
+        record_audit_event(
+            module_name="Tally Bridge",
+            event_type="register_imported",
+            entity_type="tally_bridge_run",
+            entity_id=run.id,
+            entity_name=run.register_filename or run.payload_filename,
+            summary_text=f"Imported returned Tally register '{run.register_filename}' and linked it to SKU Automator.",
+            details={
+                "sku_automator_run_id": sku_run.id if sku_run else "",
+                "rows_ready": sku_run.rows_ready if sku_run else 0,
+                "rows_needing_review": sku_run.rows_needing_review if sku_run else 0,
+            },
+        )
+        db.session.commit()
+        flash("Returned Tally register imported and linked to SKU Automator.", "success")
+        return redirect(url_for("view_tally_bridge_run", run_id=run.id))
+
+    @app.get("/tally-bridge/runs/<run_id>/register/download")
+    def download_tally_bridge_register(run_id: str):
+        run = get_tally_bridge_run(run_id)
+        if run is None or not run.register_storage_path:
+            abort(404)
+        path = Path(run.register_storage_path)
+        if not path.exists():
+            abort(404)
+        return send_file(path, as_attachment=True, download_name=run.register_filename, mimetype=run.register_content_type)
 
     @app.get("/bp-rules")
     def brand_partner_rules_home() -> str:

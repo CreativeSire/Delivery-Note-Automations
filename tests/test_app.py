@@ -380,6 +380,7 @@ def test_tally_bridge_outbound_run_can_prepare_and_stage_sales_order_payload() -
         sheet.title = "UOM"
         sheet.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
         sheet.append(["SKU Alpha", "ctn", "pcs", 12, "Yes", 100])
+        sheet.append(["SKU Vanilla", "ctn", "pcs", 12, "No", 120])
         uom_bytes = BytesIO()
         uom.save(uom_bytes)
         uom_bytes.seek(0)
@@ -499,11 +500,28 @@ def test_tally_bridge_outbound_run_can_prepare_and_stage_sales_order_payload() -
         output = workbook["Sales Order"]
         assert output["B2"].value == "VT-17599901"
 
+        register_upload = client.post(
+            f"/tally-bridge/runs/{bridge_run_id}/register",
+            data={"register_file": (BytesIO(build_tally_export_workbook().getvalue()), "salesordertest.xls")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert register_upload.status_code == 302
+        assert register_upload.headers["Location"].endswith(f"/tally-bridge/runs/{bridge_run_id}")
+
         with app.app_context():
             bridge_run = db.session.get(TallyBridgeRun, bridge_run_id)
             assert bridge_run is not None
-            assert bridge_run.status == "confirmed_in_tally"
+            assert bridge_run.status == "linked_to_sku_automator"
             assert bridge_run.confirmed_at is not None
+            assert bridge_run.register_filename == "salesordertest.xls"
+            assert bridge_run.register_storage_path is not None
+            assert Path(bridge_run.register_storage_path).exists()
+            assert bridge_run.sku_automator_run_id is not None
+            sku_run = db.session.get(SkuAutomatorRun, bridge_run.sku_automator_run_id)
+            assert sku_run is not None
+            assert sku_run.rows_ready == 3
+            assert sku_run.rows_needing_review == 0
             db.session.remove()
             db.engine.dispose()
 
