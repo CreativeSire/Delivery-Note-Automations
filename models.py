@@ -179,6 +179,9 @@ class TallyBridgeRun(db.Model):
     register_filename = db.Column(db.String(255), nullable=True)
     register_storage_path = db.Column(db.String(512), nullable=True)
     register_content_type = db.Column(db.String(255), nullable=True)
+    endpoint_response_storage_path = db.Column(db.String(512), nullable=True)
+    endpoint_response_content_type = db.Column(db.String(255), nullable=True)
+    endpoint_http_status = db.Column(db.Integer, nullable=True)
     rows_ready = db.Column(db.Integer, nullable=False, default=0)
     error_message = db.Column(db.Text, nullable=True)
     notes = db.Column(db.Text, nullable=True)
@@ -668,6 +671,9 @@ RUNTIME_SCHEMA_UPDATES = {
         "register_filename": "VARCHAR(255)",
         "register_storage_path": "VARCHAR(512)",
         "register_content_type": "VARCHAR(255)",
+        "endpoint_response_storage_path": "VARCHAR(512)",
+        "endpoint_response_content_type": "VARCHAR(255)",
+        "endpoint_http_status": "INTEGER",
         "register_received_at": sqltypes.DateTime(timezone=True),
     },
 }

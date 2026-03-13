@@ -112,6 +112,7 @@ from tally_bridge_services import (
     probe_tally_bridge_profile,
     pull_tally_register_from_profile_target,
     save_tally_bridge_profile,
+    send_tally_bridge_run_to_endpoint,
     stage_tally_bridge_run_to_profile_target,
     update_tally_bridge_run_status,
     update_tally_diagnostics_run,
@@ -487,6 +488,31 @@ def create_app(test_config: dict | None = None) -> Flask:
         flash("Tally payload staged to the profile target folder.", "success")
         return redirect(url_for("view_tally_bridge_run", run_id=run.id))
 
+    @app.post("/tally-bridge/runs/<run_id>/send")
+    def send_tally_bridge_run_view(run_id: str) -> str:
+        try:
+            run = send_tally_bridge_run_to_endpoint(run_id)
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("view_tally_bridge_run", run_id=run_id))
+
+        record_audit_event(
+            module_name="Tally Bridge",
+            event_type="outbound_run_sent_direct",
+            entity_type="tally_bridge_run",
+            entity_id=run.id,
+            entity_name=run.payload_filename,
+            summary_text=f"Sent Tally Bridge run '{run.payload_filename}' directly to the configured endpoint.",
+            details={
+                "status": run.status,
+                "endpoint_http_status": run.endpoint_http_status or "",
+                "endpoint_response_path": run.endpoint_response_storage_path or "",
+            },
+        )
+        db.session.commit()
+        flash("Tally payload sent directly to the configured endpoint.", "success")
+        return redirect(url_for("view_tally_bridge_run", run_id=run.id))
+
     @app.post("/tally-bridge/runs/<run_id>/status")
     def update_tally_bridge_run_view(run_id: str) -> str:
         try:
@@ -521,6 +547,18 @@ def create_app(test_config: dict | None = None) -> Flask:
         if not path.exists():
             abort(404)
         return send_file(path, as_attachment=True, download_name=run.payload_filename, mimetype=run.payload_content_type)
+
+    @app.get("/tally-bridge/runs/<run_id>/endpoint-response/download")
+    def download_tally_bridge_endpoint_response(run_id: str):
+        run = get_tally_bridge_run(run_id)
+        if run is None or not run.endpoint_response_storage_path:
+            abort(404)
+        path = Path(run.endpoint_response_storage_path)
+        if not path.exists():
+            abort(404)
+        suffix = path.suffix or ".txt"
+        download_name = f"tally-endpoint-response-{run.id}{suffix}"
+        return send_file(path, as_attachment=True, download_name=download_name, mimetype=run.endpoint_response_content_type)
 
     @app.post("/tally-bridge/runs/<run_id>/register")
     def upload_tally_bridge_register(run_id: str) -> str:

@@ -79,6 +79,11 @@
       </div>
       <div class="actions">
         <a class="primary-button" href="{{ url_for('download_tally_bridge_payload', run_id=detail.run.id) }}">Download payload</a>
+        {% if detail.direct_send_allowed %}
+          <form action="{{ url_for('send_tally_bridge_run_view', run_id=detail.run.id) }}" method="post">
+            <button class="primary-button" type="submit">Send directly to Tally endpoint</button>
+          </form>
+        {% endif %}
         {% if detail.run.profile and detail.run.profile.connection_mode in ['file_drop', 'hybrid'] and detail.link_guard.status != 'blocked' %}
           <form action="{{ url_for('stage_tally_bridge_run_view', run_id=detail.run.id) }}" method="post">
             <button class="secondary-button" type="submit">Stage to profile target</button>
@@ -98,6 +103,8 @@
         <p class="empty-state">
           {% if detail.link_guard.status == 'blocked' %}
             The bridge is holding this run because the latest diagnostics say the imported Tally chain breaks. Download is still available for inspection, but staging and downstream continuation stay blocked until diagnostics are fixed.
+          {% elif detail.direct_send_allowed %}
+            This run is cleared for direct endpoint delivery. Use the direct send action only after the XML / HTTP probe has succeeded for this profile.
           {% elif detail.auto_fetch_allowed %}
             This run is on a cleared bridge path. If your profile target folder receives the returned Tally register automatically, use the pull action to import it here without a manual upload step.
           {% else %}
@@ -176,11 +183,28 @@
         </article>
         <article class="warning-row warning-row-rich">
           <div>
+            <strong>Endpoint response</strong>
+            <small>
+              {% if detail.run.endpoint_http_status %}
+                HTTP {{ detail.run.endpoint_http_status }}
+              {% else %}
+                No direct endpoint response stored yet
+              {% endif %}
+            </small>
+          </div>
+        </article>
+        <article class="warning-row warning-row-rich">
+          <div>
             <strong>Linked SKU Automator</strong>
             <small>{{ detail.run.sku_automator_run.original_filename if detail.run.sku_automator_run else 'Not linked yet' }}</small>
           </div>
         </article>
       </div>
+      {% if detail.endpoint_response_exists %}
+        <div class="actions">
+          <a class="secondary-button" href="{{ url_for('download_tally_bridge_endpoint_response', run_id=detail.run.id) }}">Download endpoint response</a>
+        </div>
+      {% endif %}
     </article>
   </section>
 

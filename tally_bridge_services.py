@@ -162,8 +162,10 @@ class TallyBridgeRunDetail:
     payload_exists: bool
     staged_exists: bool
     register_exists: bool
+    endpoint_response_exists: bool
     link_guard: "TallyBridgeLinkGuard"
     auto_fetch_allowed: bool
+    direct_send_allowed: bool
 
 
 @dataclass
@@ -309,15 +311,25 @@ def build_tally_bridge_run_detail(run_id: str) -> TallyBridgeRunDetail | None:
         return None
     payload_path = Path(run.payload_storage_path)
     staged_path = Path(run.staged_storage_path) if run.staged_storage_path else None
+    endpoint_response_path = Path(run.endpoint_response_storage_path) if run.endpoint_response_storage_path else None
     link_guard = resolve_tally_bridge_link_guard(run.profile_id)
+    direct_send_allowed = bool(
+        run.profile
+        and run.profile.connection_mode in {"xml_http", "hybrid"}
+        and _is_http_endpoint(run.profile.endpoint_url)
+        and link_guard.status == "clear"
+        and (run.profile.capabilities_json or {}).get("probe_status") == "success"
+    )
     return TallyBridgeRunDetail(
         run=run,
         recommended_mode_label=_mode_label(run.bridge_mode),
         payload_exists=payload_path.exists(),
         staged_exists=bool(staged_path and staged_path.exists()),
         register_exists=bool(run.register_storage_path and Path(run.register_storage_path).exists()),
+        endpoint_response_exists=bool(endpoint_response_path and endpoint_response_path.exists()),
         link_guard=link_guard,
         auto_fetch_allowed=bool(run.profile and run.profile.connection_mode in {"file_drop", "hybrid"} and link_guard.status == "clear"),
+        direct_send_allowed=direct_send_allowed,
     )
 
 
@@ -571,6 +583,77 @@ def create_tally_bridge_run_from_sales_order(
     return run
 
 
+def send_tally_bridge_run_to_endpoint(run_id: str) -> TallyBridgeRun:
+    run = db.session.get(TallyBridgeRun, run_id)
+    if run is None:
+        raise ServiceError("This Tally Bridge run could not be found.")
+    assert_tally_bridge_link_guard(run, action_label="send this payload into the Tally endpoint")
+    if run.profile is None:
+        raise ServiceError("Link this run to a Tally profile before sending it directly.")
+
+    endpoint = _nullable_text(run.profile.endpoint_url)
+    if not _is_http_endpoint(endpoint):
+        raise ServiceError("The active Tally profile must have an http:// or https:// endpoint for direct send.")
+
+    capabilities = dict(run.profile.capabilities_json or {})
+    if capabilities.get("probe_status") != "success":
+        raise ServiceError("Run a successful XML / HTTP probe on this Tally profile before direct send.")
+
+    payload_path = Path(run.payload_storage_path)
+    if not payload_path.exists():
+        raise ServiceError("The stored Sales Order payload for this bridge run is missing.")
+
+    payload_bytes = payload_path.read_bytes()
+    request = urlrequest.Request(
+        endpoint,
+        data=payload_bytes,
+        method="POST",
+        headers={
+            "Content-Type": run.payload_content_type or "application/octet-stream",
+            "Accept": "application/xml, text/xml, application/json, text/plain",
+            "User-Agent": "DALA-Tally-Bridge/1.0",
+            "X-DALA-Bridge-Run-ID": run.id,
+            "X-DALA-Source-Run-ID": run.sales_order_run_id,
+            "X-DALA-Filename": run.payload_filename,
+        },
+    )
+
+    sent_at = utcnow()
+    try:
+        with urlrequest.urlopen(request, timeout=20) as response:
+            response_bytes = response.read(4096)
+            http_status = response.getcode() or 200
+            response_content_type = response.headers.get_content_type() if response.headers else "application/octet-stream"
+    except urlerror.HTTPError as exc:
+        response_bytes = exc.read(4096)
+        response_content_type = exc.headers.get_content_type() if exc.headers else "text/plain"
+        _store_tally_endpoint_response(run, response_bytes, response_content_type)
+        run.endpoint_http_status = exc.code
+        run.status = "needs_attention"
+        run.error_message = f"Endpoint returned HTTP {exc.code} during direct send."
+        db.session.commit()
+        raise ServiceError(run.error_message) from exc
+    except urlerror.URLError as exc:
+        run.status = "needs_attention"
+        run.error_message = f"Could not reach the Tally endpoint during direct send: {exc.reason}"
+        db.session.commit()
+        raise ServiceError(run.error_message) from exc
+
+    _store_tally_endpoint_response(run, response_bytes, response_content_type)
+    run.endpoint_http_status = http_status
+    run.sent_at = sent_at
+    if _response_confirms_direct_send(response_bytes, response_content_type):
+        run.status = "confirmed_in_tally"
+        run.confirmed_at = utcnow()
+        run.error_message = None
+    else:
+        run.status = "sent_to_tally"
+        run.confirmed_at = None
+        run.error_message = None
+    db.session.commit()
+    return run
+
+
 def update_tally_bridge_run_status(run_id: str, values: dict[str, str]) -> TallyBridgeRun:
     run = db.session.get(TallyBridgeRun, run_id)
     if run is None:
@@ -805,6 +888,56 @@ def _attach_register_payload_to_bridge_run(
     run.error_message = None
     db.session.commit()
     return run
+
+
+def _store_tally_endpoint_response(run: TallyBridgeRun, response_bytes: bytes, content_type: str | None) -> None:
+    target_dir = _bridge_storage_dir("outbound", run.id)
+    suffix = _response_file_suffix(content_type)
+    response_path = target_dir / f"endpoint-response{suffix}"
+    response_path.write_bytes(response_bytes)
+    run.endpoint_response_storage_path = str(response_path)
+    run.endpoint_response_content_type = content_type or "application/octet-stream"
+
+
+def _response_file_suffix(content_type: str | None) -> str:
+    normalized = (content_type or "").lower()
+    if "xml" in normalized:
+        return ".xml"
+    if "json" in normalized:
+        return ".json"
+    if "html" in normalized:
+        return ".html"
+    return ".txt"
+
+
+def _response_confirms_direct_send(response_bytes: bytes, content_type: str | None) -> bool:
+    response_text = response_bytes.decode("utf-8", errors="replace").strip()
+    normalized = response_text.lower()
+    if not normalized:
+        return False
+    if "json" in (content_type or "").lower():
+        return any(
+            token in normalized
+            for token in ('"status":"success"', '"status": "success"', '"status":"confirmed"', '"accepted":true')
+        )
+    if "<lineerror" in normalized:
+        return False
+    return any(
+        token in normalized
+        for token in (
+            "<created>",
+            "<altered>",
+            "<lastvchid>",
+            "<tallymessage",
+            "<status>success</status>",
+            "<status>confirmed</status>",
+        )
+    )
+
+
+def _is_http_endpoint(endpoint: str | None) -> bool:
+    normalized = _string_value(endpoint).lower()
+    return normalized.startswith("http://") or normalized.startswith("https://")
 
 
 def _derive_tally_bridge_pipeline_stage(run: TallyBridgeRun) -> str:
