@@ -1,0 +1,256 @@
+{% extends "base.html" %}
+
+{% block title %}Tally Bridge | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="hero-band">
+    <div>
+      <p class="eyebrow">Tally Bridge</p>
+      <h1>One workspace for Tally connection truth, diagnostics evidence, and the bridge mode we should trust next.</h1>
+      <p class="page-copy">Use this first phase to document what your real Tally accepts, compare a manual linked case against an uploaded unlinked case, and decide whether the bridge should be XML, hybrid, file-drop, or manual fallback.</p>
+    </div>
+    <div class="actions">
+      <a class="secondary-button" href="{{ url_for('sales_order_home') }}">Open Sales Order</a>
+      <a class="secondary-button" href="{{ url_for('audit_timeline', module='Tally Bridge') }}">Audit timeline</a>
+    </div>
+  </section>
+
+  <section class="stat-row">
+    <article class="glass-card stat-card">
+      <span class="panel-label">Profiles</span>
+      <strong>{{ summary.profiles|length }}</strong>
+      <small>known Tally environments</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Diagnostics runs</span>
+      <strong>{{ summary.run_count }}</strong>
+      <small>captured bridge investigations</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Open investigations</span>
+      <strong>{{ summary.open_run_count }}</strong>
+      <small>still waiting on evidence or findings</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Artifacts stored</span>
+      <strong>{{ summary.artifact_count }}</strong>
+      <small>XML, exports, screenshots, notes</small>
+    </article>
+  </section>
+
+  <section class="content-split content-split-hero">
+    <article class="glass-card module-hero module-hero-primary">
+      <div>
+        <p class="eyebrow">Connection profile</p>
+        <h2>{% if summary.active_profile %}{{ summary.active_profile.name }}{% else %}Create the first Tally profile{% endif %}</h2>
+        <p class="module-copy">This profile is where we store your Tally version, company, endpoint or machine details, and your current belief about whether native read or write access is even available.</p>
+      </div>
+      <div class="module-meta-grid">
+        <div class="meter">
+          <span class="metric-label">Active company</span>
+          <strong>{{ summary.active_profile.company_name if summary.active_profile and summary.active_profile.company_name else 'Not recorded yet' }}</strong>
+        </div>
+        <div class="meter">
+          <span class="metric-label">Connection mode</span>
+          <strong>{{ summary.active_profile.connection_mode.replace('_', ' ').title() if summary.active_profile else 'Manual Fallback' }}</strong>
+        </div>
+        <div class="meter">
+          <span class="metric-label">Version</span>
+          <strong>{{ summary.active_profile.tally_version if summary.active_profile and summary.active_profile.tally_version else 'Unknown' }}</strong>
+        </div>
+        <div class="meter">
+          <span class="metric-label">Endpoint / machine</span>
+          <strong>{{ summary.active_profile.endpoint_url or summary.active_profile.machine_name if summary.active_profile else 'Not recorded yet' }}</strong>
+        </div>
+      </div>
+      {% if summary.latest_run %}
+        <div class="chip-row">
+          <span class="database-toolbar-pill is-active">Latest run {{ summary.latest_run.status.replace('_', ' ') }}</span>
+          <span class="database-toolbar-pill">Recommendation {{ summary.latest_run.recommended_mode.replace('_', ' ').title() if summary.latest_run.recommended_mode else 'Pending' }}</span>
+        </div>
+      {% endif %}
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Profile editor</p>
+          <h2>Save the current Tally environment</h2>
+        </div>
+      </div>
+      <form class="form-stack" action="{{ url_for('save_tally_bridge_profile_view') }}" method="post">
+        {% if summary.active_profile %}
+          <input type="hidden" name="profile_id" value="{{ summary.active_profile.id }}">
+        {% endif %}
+        <input type="hidden" name="is_active" value="yes">
+        {% set profile_caps = summary.active_profile.capabilities_json if summary.active_profile and summary.active_profile.capabilities_json else {} %}
+        <label class="field">
+          <span class="field-label">Profile name</span>
+          <input name="name" type="text" value="{{ summary.active_profile.name if summary.active_profile else '' }}" placeholder="Main warehouse Tally" required>
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Connection mode</span>
+            <select name="connection_mode">
+              {% for code, label in connection_mode_options %}
+                <option value="{{ code }}" {% if summary.active_profile and summary.active_profile.connection_mode == code %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Company name</span>
+            <input name="company_name" type="text" value="{{ summary.active_profile.company_name if summary.active_profile and summary.active_profile.company_name else '' }}" placeholder="DALA company in Tally">
+          </label>
+        </div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Tally version</span>
+            <input name="tally_version" type="text" value="{{ summary.active_profile.tally_version if summary.active_profile and summary.active_profile.tally_version else '' }}" placeholder="Tally Prime 4.x">
+          </label>
+          <label class="field">
+            <span class="field-label">Machine name</span>
+            <input name="machine_name" type="text" value="{{ summary.active_profile.machine_name if summary.active_profile and summary.active_profile.machine_name else '' }}" placeholder="Front desk PC">
+          </label>
+        </div>
+        <label class="field">
+          <span class="field-label">Endpoint or local bridge path</span>
+          <input name="endpoint_url" type="text" value="{{ summary.active_profile.endpoint_url if summary.active_profile and summary.active_profile.endpoint_url else '' }}" placeholder="http://127.0.0.1:9000 or watched folder path">
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">XML / HTTP access</span>
+            <select name="profile_xml_http">
+              {% for code, label in [('unknown', 'Unknown'), ('yes', 'Yes'), ('no', 'No')] %}
+                <option value="{{ code }}" {% if profile_caps.get('xml_http', 'unknown') == code %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Outbound import works</span>
+            <select name="profile_outbound_import">
+              {% for code, label in [('unknown', 'Unknown'), ('yes', 'Yes'), ('no', 'No')] %}
+                <option value="{{ code }}" {% if profile_caps.get('outbound_import', 'unknown') == code %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Register fetch works</span>
+            <select name="profile_register_fetch">
+              {% for code, label in [('unknown', 'Unknown'), ('yes', 'Yes'), ('no', 'No')] %}
+                <option value="{{ code }}" {% if profile_caps.get('register_fetch', 'unknown') == code %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+        <label class="field">
+          <span class="field-label">Notes</span>
+          <textarea class="planner-textarea" name="notes" rows="4" placeholder="Anything we already know about this Tally environment">{{ summary.active_profile.notes if summary.active_profile and summary.active_profile.notes else '' }}</textarea>
+        </label>
+        <div class="actions">
+          <button class="primary-button" type="submit">Save Tally profile</button>
+        </div>
+      </form>
+    </article>
+  </section>
+
+  <section class="content-split">
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Diagnostics starter</p>
+          <h2>Open a Tally investigation run</h2>
+        </div>
+      </div>
+      <p class="page-copy">Create one diagnostics run for each real Tally investigation. The detail page will let you upload the manual linked case, the uploaded unlinked case, and your findings about connection, import, fetch, and link integrity.</p>
+      <form class="form-stack" action="{{ url_for('create_tally_diagnostics') }}" method="post">
+        <label class="field">
+          <span class="field-label">Run title</span>
+          <input name="title" type="text" placeholder="March linkage check" required>
+        </label>
+        <label class="field">
+          <span class="field-label">Profile</span>
+          <select name="profile_id">
+            <option value="">Use active profile</option>
+            {% for profile in summary.profiles %}
+              <option value="{{ profile.id }}" {% if summary.active_profile and summary.active_profile.id == profile.id %}selected{% endif %}>{{ profile.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">Notes</span>
+          <textarea class="planner-textarea" name="notes" rows="4" placeholder="Why are we running this check, and what Tally issue are we trying to confirm?"></textarea>
+        </label>
+        <div class="actions">
+          <button class="primary-button" type="submit">Create diagnostics run</button>
+        </div>
+      </form>
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">What to upload</p>
+          <h2>Evidence pack for a clean verdict</h2>
+        </div>
+      </div>
+      <div class="warning-stack">
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>Manual linked case</strong>
+            <small>Sales Order, Delivery Note, and Sales Invoice created inside Tally by calling the earlier voucher.</small>
+          </div>
+        </article>
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>Uploaded unlinked case</strong>
+            <small>The imported Sales Order and Delivery Note that look correct on paper but do not connect inside Tally.</small>
+          </div>
+        </article>
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>Environment proof</strong>
+            <small>Tally version, settings, import screens, register exports, XML dumps, or screenshots showing what the workstation can really do.</small>
+          </div>
+        </article>
+      </div>
+    </article>
+  </section>
+
+  <section class="glass-card">
+    <div class="module-head compact">
+      <div>
+        <p class="eyebrow">Recent runs</p>
+        <h2>Diagnostics history</h2>
+      </div>
+    </div>
+    {% if summary.recent_runs %}
+      <div class="warning-stack">
+        {% for run in summary.recent_runs %}
+          <article class="warning-row warning-row-rich tally-run-card">
+            <div class="tally-run-card-main">
+              <div>
+                <strong>{{ run.title }}</strong>
+                <p class="empty-state">Profile: {{ run.profile.name if run.profile else 'No profile linked yet' }}</p>
+              </div>
+              <div class="chip-row">
+                <span class="database-toolbar-pill">{{ run.status.replace('_', ' ') }}</span>
+                <span class="database-toolbar-pill">{{ run.recommended_mode.replace('_', ' ').title() if run.recommended_mode else 'Pending recommendation' }}</span>
+                <span class="database-toolbar-pill">Manual {{ run.manual_case_status.replace('_', ' ') if run.manual_case_status else 'Missing' }}</span>
+                <span class="database-toolbar-pill">Upload {{ run.uploaded_case_status.replace('_', ' ') if run.uploaded_case_status else 'Missing' }}</span>
+              </div>
+            </div>
+            <div class="actions">
+              <a class="secondary-button" href="{{ url_for('view_tally_diagnostics', run_id=run.id) }}">Open run</a>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="delivery-run-empty">
+        <span class="mini-chip">No diagnostics yet</span>
+        <h3>Create the first Tally bridge run.</h3>
+        <p class="empty-state">Once a run exists, this page will keep the evidence, recommendation, and audit trail in one place.</p>
+      </div>
+    {% endif %}
+  </section>
+{% endblock %}

@@ -2754,6 +2754,49 @@ h3 {
   background: rgba(20, 52, 60, 0.04);
 }
 
+.tally-run-card,
+.tally-artifact-group {
+  gap: 16px;
+}
+
+.tally-run-card-main,
+.tally-artifact-group-head,
+.tally-artifact-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.tally-artifact-list {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+}
+
+.tally-artifact-card {
+  width: 100%;
+  padding: 16px 18px;
+  border-radius: 20px;
+  background: rgba(20, 52, 60, 0.045);
+}
+
+.tally-artifact-card .chip-row {
+  justify-content: flex-end;
+}
+
+@media (max-width: 860px) {
+  .tally-run-card-main,
+  .tally-artifact-group-head,
+  .tally-artifact-card {
+    flex-direction: column;
+  }
+
+  .tally-artifact-card .chip-row {
+    justify-content: flex-start;
+  }
+}
+
 .warning-row-rich {
   display: grid;
   gap: 12px;

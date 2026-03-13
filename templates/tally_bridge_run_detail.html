@@ -1,0 +1,280 @@
+{% extends "base.html" %}
+
+{% block title %}Tally Diagnostics {{ detail.run.title }} | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="hero-band">
+    <div>
+      <p class="eyebrow">Tally Bridge · Diagnostics</p>
+      <h1>{{ detail.run.title }}</h1>
+      <p class="page-copy">This run holds the real Tally evidence for one investigation: what we uploaded, what Tally returned, whether native access is possible, and whether Sales Order, Delivery Note, and Sales Invoice truly link the way manual entry does.</p>
+    </div>
+    <div class="actions">
+      <span class="hero-chip">{{ detail.run.status.replace('_', ' ') }}</span>
+      <a class="secondary-button" href="{{ url_for('tally_bridge_home') }}">Back to Tally Bridge</a>
+    </div>
+  </section>
+
+  <section class="stat-row">
+    <article class="glass-card stat-card">
+      <span class="panel-label">Recommendation</span>
+      <strong>{{ detail.recommended_mode_label }}</strong>
+      <small>best bridge mode from current evidence</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Artifacts</span>
+      <strong>{{ detail.artifact_count }}</strong>
+      <small>files attached to this run</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Manual case</span>
+      <strong>{{ detail.run.manual_case_status.replace('_', ' ') }}</strong>
+      <small>linked golden sample status</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Upload case</span>
+      <strong>{{ detail.run.uploaded_case_status.replace('_', ' ') }}</strong>
+      <small>uploaded comparison sample status</small>
+    </article>
+  </section>
+
+  <section class="content-split content-split-hero">
+    <article class="glass-card module-hero module-hero-primary">
+      <div>
+        <p class="eyebrow">Current read</p>
+        <h2>{{ detail.run.profile.name if detail.run.profile else 'No profile linked' }}</h2>
+        <p class="module-copy">Use this recommendation as the live truth for what to build next. It updates from the capability answers below, not from assumptions.</p>
+      </div>
+      <div class="module-meta-grid">
+        <div class="meter">
+          <span class="metric-label">XML / HTTP</span>
+          <strong>{{ detail.run.xml_http_supported.replace('_', ' ').title() if detail.run.xml_http_supported else 'Unknown' }}</strong>
+        </div>
+        <div class="meter">
+          <span class="metric-label">Outbound import</span>
+          <strong>{{ detail.run.outbound_import_supported.replace('_', ' ').title() if detail.run.outbound_import_supported else 'Unknown' }}</strong>
+        </div>
+        <div class="meter">
+          <span class="metric-label">Register fetch</span>
+          <strong>{{ detail.run.register_fetch_supported.replace('_', ' ').title() if detail.run.register_fetch_supported else 'Unknown' }}</strong>
+        </div>
+        <div class="meter">
+          <span class="metric-label">DN links to SO</span>
+          <strong>{{ detail.run.dn_link_supported.replace('_', ' ').title() if detail.run.dn_link_supported else 'Unknown' }}</strong>
+        </div>
+      </div>
+      <div class="chip-row">
+        <span class="database-toolbar-pill is-active">Recommended {{ detail.recommended_mode_label }}</span>
+        {% if detail.run.profile and detail.run.profile.company_name %}
+          <span class="database-toolbar-pill">{{ detail.run.profile.company_name }}</span>
+        {% endif %}
+        {% if detail.run.profile and detail.run.profile.tally_version %}
+          <span class="database-toolbar-pill">{{ detail.run.profile.tally_version }}</span>
+        {% endif %}
+      </div>
+      {% if detail.run.findings_summary %}
+        <p class="subtle-note">{{ detail.run.findings_summary }}</p>
+      {% endif %}
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Assessment</p>
+          <h2>Capture what this run proves</h2>
+        </div>
+      </div>
+      <form class="form-stack" action="{{ url_for('update_tally_diagnostics_view', run_id=detail.run.id) }}" method="post">
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Run status</span>
+            <select name="status">
+              {% for code, label in run_status_options %}
+                <option value="{{ code }}" {% if detail.run.status == code %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Manual linked case</span>
+            <select name="manual_case_status">
+              {% for code, label in case_status_options %}
+                <option value="{{ code }}" {% if detail.run.manual_case_status == code %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Uploaded comparison case</span>
+            <select name="uploaded_case_status">
+              {% for code, label in case_status_options %}
+                <option value="{{ code }}" {% if detail.run.uploaded_case_status == code %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">XML / HTTP works</span>
+            <select name="xml_http_supported">
+              {% for code, label in yes_no_unknown_options %}
+                <option value="{{ code }}" {% if detail.run.xml_http_supported == code %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Outbound import works</span>
+            <select name="outbound_import_supported">
+              {% for code, label in yes_no_unknown_options %}
+                <option value="{{ code }}" {% if detail.run.outbound_import_supported == code %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Register fetch works</span>
+            <select name="register_fetch_supported">
+              {% for code, label in yes_no_unknown_options %}
+                <option value="{{ code }}" {% if detail.run.register_fetch_supported == code %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">DN links to SO on import</span>
+            <select name="dn_link_supported">
+              {% for code, label in yes_no_unknown_options %}
+                <option value="{{ code }}" {% if detail.run.dn_link_supported == code %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+        <label class="field">
+          <span class="field-label">Findings summary</span>
+          <textarea class="planner-textarea" name="findings_summary" rows="4" placeholder="State what the evidence tells us in plain English">{{ detail.run.findings_summary or '' }}</textarea>
+        </label>
+        <label class="field">
+          <span class="field-label">Notes</span>
+          <textarea class="planner-textarea" name="notes" rows="5" placeholder="Extra observations, open questions, or next actions">{{ detail.run.notes or '' }}</textarea>
+        </label>
+        <div class="actions">
+          <button class="primary-button" type="submit">Save diagnostics assessment</button>
+        </div>
+      </form>
+    </article>
+  </section>
+
+  <section class="content-split">
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Upload evidence</p>
+          <h2>Add a Tally artifact</h2>
+        </div>
+      </div>
+      <form class="form-stack" action="{{ url_for('upload_tally_diagnostics_artifact', run_id=detail.run.id) }}" method="post" enctype="multipart/form-data">
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Artifact group</span>
+            <select name="artifact_group">
+              {% for code, label in artifact_group_options %}
+                <option value="{{ code }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Artifact type</span>
+            <select name="artifact_type">
+              {% for code, label in artifact_type_options %}
+                <option value="{{ code }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+        <label class="file-field">
+          <span class="field-label">Artifact file</span>
+          <input name="artifact_file" type="file" accept=".xml,.xlsx,.xls,.csv,.txt,.png,.jpg,.jpeg,.pdf" required>
+        </label>
+        <label class="field">
+          <span class="field-label">Description</span>
+          <textarea class="planner-textarea" name="description" rows="3" placeholder="Why this file matters, where it came from, or which case it belongs to"></textarea>
+        </label>
+        <div class="actions">
+          <button class="primary-button" type="submit">Upload artifact</button>
+        </div>
+      </form>
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Evidence checklist</p>
+          <h2>What should this run include?</h2>
+        </div>
+      </div>
+      <div class="warning-stack">
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>Manual linked sample</strong>
+            <small>One Sales Order, one Delivery Note created from it, and one Sales Invoice converted from it.</small>
+          </div>
+        </article>
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>Uploaded comparison sample</strong>
+            <small>The imported Sales Order and Delivery Note pair that do not recognize each other inside Tally.</small>
+          </div>
+        </article>
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>Environment proof</strong>
+            <small>Settings screen, version/build screenshot, register export, XML dump, or other proof of what Tally supports.</small>
+          </div>
+        </article>
+      </div>
+    </article>
+  </section>
+
+  <section class="glass-card">
+    <div class="module-head compact">
+      <div>
+        <p class="eyebrow">Artifacts</p>
+        <h2>Evidence captured in this run</h2>
+      </div>
+    </div>
+    {% if detail.artifact_count %}
+      <div class="warning-stack">
+        {% for group in detail.artifact_groups %}
+          {% if group.artifacts %}
+            <article class="warning-row warning-row-rich tally-artifact-group">
+              <div class="tally-artifact-group-head">
+                <strong>{{ group.label }}</strong>
+                <span class="database-toolbar-pill">{{ group.artifacts|length }} file{{ '' if group.artifacts|length == 1 else 's' }}</span>
+              </div>
+              <div class="tally-artifact-list">
+                {% for artifact in group.artifacts %}
+                  <div class="tally-artifact-card">
+                    <div>
+                      <strong>{{ artifact.filename }}</strong>
+                      <p class="empty-state">{{ artifact.artifact_type.replace('_', ' ') }}</p>
+                      {% if artifact.description %}
+                        <p class="subtle-note">{{ artifact.description }}</p>
+                      {% endif %}
+                    </div>
+                    <div class="chip-row">
+                      <span class="database-toolbar-pill">{{ artifact.file_size }} bytes</span>
+                      <span class="database-toolbar-pill">{{ artifact.created_at.strftime('%Y-%m-%d %H:%M') if artifact.created_at else '' }}</span>
+                      <a class="secondary-button" href="{{ url_for('download_tally_diagnostics_artifact', artifact_id=artifact.id) }}">Download</a>
+                    </div>
+                  </div>
+                {% endfor %}
+              </div>
+            </article>
+          {% endif %}
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="delivery-run-empty">
+        <span class="mini-chip">No evidence uploaded</span>
+        <h3>Start with one artifact from Tally.</h3>
+        <p class="empty-state">A screenshot, XML export, register file, or voucher workbook is enough to begin the diagnostics run.</p>
+      </div>
+    {% endif %}
+  </section>
+{% endblock %}

@@ -92,6 +92,21 @@ from workflow_services import (
     export_sales_order_run_to_workbook,
     export_sku_automator_run_to_workbook,
 )
+from tally_bridge_services import (
+    ARTIFACT_GROUP_OPTIONS,
+    ARTIFACT_TYPE_OPTIONS,
+    CASE_STATUS_OPTIONS,
+    CONNECTION_MODE_OPTIONS,
+    RUN_STATUS_OPTIONS,
+    YES_NO_UNKNOWN_OPTIONS,
+    add_tally_diagnostics_artifact,
+    build_tally_bridge_summary,
+    build_tally_diagnostics_detail,
+    create_tally_diagnostics_run,
+    get_tally_diagnostics_artifact,
+    save_tally_bridge_profile,
+    update_tally_diagnostics_run,
+)
 
 APP_TIMEZONE = os.environ.get("APP_TIMEZONE", "Africa/Lagos")
 
@@ -211,6 +226,158 @@ def create_app(test_config: dict | None = None) -> Flask:
         selected_module = request.args.get("module", "").strip() or None
         timeline = build_audit_timeline(module_name=selected_module)
         return render_template("audit_timeline.html", timeline=timeline)
+
+    @app.get("/tally-bridge")
+    def tally_bridge_home() -> str:
+        summary = build_tally_bridge_summary()
+        return render_template(
+            "tally_bridge_home.html",
+            summary=summary,
+            connection_mode_options=CONNECTION_MODE_OPTIONS,
+        )
+
+    @app.post("/tally-bridge/profile")
+    def save_tally_bridge_profile_view() -> str:
+        profile_id_raw = request.form.get("profile_id", "").strip()
+        profile_id = int(profile_id_raw) if profile_id_raw.isdigit() else None
+        try:
+            profile = save_tally_bridge_profile(dict(request.form), profile_id=profile_id)
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("tally_bridge_home"))
+
+        record_audit_event(
+            module_name="Tally Bridge",
+            event_type="profile_saved",
+            entity_type="tally_profile",
+            entity_id=str(profile.id),
+            entity_name=profile.name,
+            summary_text=f"Saved Tally Bridge profile '{profile.name}'.",
+            details={
+                "connection_mode": profile.connection_mode,
+                "company_name": profile.company_name or "",
+                "endpoint_url": profile.endpoint_url or "",
+            },
+        )
+        db.session.commit()
+        flash(f"Tally Bridge profile '{profile.name}' was saved.", "success")
+        return redirect(url_for("tally_bridge_home"))
+
+    @app.post("/tally-bridge/diagnostics")
+    def create_tally_diagnostics() -> str:
+        try:
+            run = create_tally_diagnostics_run(dict(request.form))
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("tally_bridge_home"))
+
+        record_audit_event(
+            module_name="Tally Bridge",
+            event_type="diagnostics_created",
+            entity_type="tally_diagnostics_run",
+            entity_id=run.id,
+            entity_name=run.title,
+            summary_text=f"Opened Tally diagnostics run '{run.title}'.",
+            details={"profile_id": run.profile_id or "", "status": run.status},
+        )
+        db.session.commit()
+        flash("Tally diagnostics run created.", "success")
+        return redirect(url_for("view_tally_diagnostics", run_id=run.id))
+
+    @app.get("/tally-bridge/diagnostics/<run_id>")
+    def view_tally_diagnostics(run_id: str) -> str:
+        detail = build_tally_diagnostics_detail(run_id)
+        if detail is None:
+            abort(404)
+        summary = build_tally_bridge_summary()
+        return render_template(
+            "tally_bridge_run_detail.html",
+            summary=summary,
+            detail=detail,
+            connection_mode_options=CONNECTION_MODE_OPTIONS,
+            run_status_options=RUN_STATUS_OPTIONS,
+            yes_no_unknown_options=YES_NO_UNKNOWN_OPTIONS,
+            case_status_options=CASE_STATUS_OPTIONS,
+            artifact_group_options=ARTIFACT_GROUP_OPTIONS,
+            artifact_type_options=ARTIFACT_TYPE_OPTIONS,
+        )
+
+    @app.post("/tally-bridge/diagnostics/<run_id>/assessment")
+    def update_tally_diagnostics_view(run_id: str) -> str:
+        try:
+            run = update_tally_diagnostics_run(run_id, dict(request.form))
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("view_tally_diagnostics", run_id=run_id))
+
+        record_audit_event(
+            module_name="Tally Bridge",
+            event_type="diagnostics_updated",
+            entity_type="tally_diagnostics_run",
+            entity_id=run.id,
+            entity_name=run.title,
+            summary_text=f"Updated diagnostics run '{run.title}' and refreshed the bridge recommendation.",
+            details={
+                "status": run.status,
+                "recommended_mode": run.recommended_mode or "",
+                "xml_http_supported": run.xml_http_supported,
+                "outbound_import_supported": run.outbound_import_supported,
+                "register_fetch_supported": run.register_fetch_supported,
+                "dn_link_supported": run.dn_link_supported,
+            },
+        )
+        db.session.commit()
+        flash("Tally diagnostics assessment updated.", "success")
+        return redirect(url_for("view_tally_diagnostics", run_id=run.id))
+
+    @app.post("/tally-bridge/diagnostics/<run_id>/artifacts")
+    def upload_tally_diagnostics_artifact(run_id: str) -> str:
+        uploaded_file = request.files.get("artifact_file")
+        if uploaded_file is None or uploaded_file.filename == "":
+            flash("Please choose the Tally artifact file first.", "error")
+            return redirect(url_for("view_tally_diagnostics", run_id=run_id))
+
+        artifact_group = request.form.get("artifact_group", "").strip()
+        artifact_type = request.form.get("artifact_type", "").strip()
+        description = request.form.get("description", "").strip()
+        try:
+            artifact = add_tally_diagnostics_artifact(
+                run_id,
+                file_storage=uploaded_file,
+                artifact_group=artifact_group,
+                artifact_type=artifact_type,
+                description=description or None,
+            )
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("view_tally_diagnostics", run_id=run_id))
+
+        record_audit_event(
+            module_name="Tally Bridge",
+            event_type="artifact_uploaded",
+            entity_type="tally_artifact",
+            entity_id=str(artifact.id),
+            entity_name=artifact.filename,
+            summary_text=f"Uploaded Tally artifact '{artifact.filename}' into diagnostics run {run_id}.",
+            details={
+                "artifact_group": artifact.artifact_group,
+                "artifact_type": artifact.artifact_type,
+                "file_size": artifact.file_size,
+            },
+        )
+        db.session.commit()
+        flash(f"Uploaded '{artifact.filename}' into the diagnostics run.", "success")
+        return redirect(url_for("view_tally_diagnostics", run_id=run_id))
+
+    @app.get("/tally-bridge/artifacts/<int:artifact_id>/download")
+    def download_tally_diagnostics_artifact(artifact_id: int):
+        artifact = get_tally_diagnostics_artifact(artifact_id)
+        if artifact is None:
+            abort(404)
+        path = Path(artifact.storage_path)
+        if not path.exists():
+            abort(404)
+        return send_file(path, as_attachment=True, download_name=artifact.filename, mimetype=artifact.content_type)
 
     @app.get("/bp-rules")
     def brand_partner_rules_home() -> str:

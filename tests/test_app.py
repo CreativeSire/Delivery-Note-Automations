@@ -28,6 +28,9 @@ from models import (
     SalesOrderRun,
     SkuAutomatorLine,
     SkuAutomatorRun,
+    TallyBridgeProfile,
+    TallyDiagnosticsArtifact,
+    TallyDiagnosticsRun,
     UomImportReview,
     UploadRun,
     db,
@@ -239,6 +242,122 @@ def build_loading_tracker_uom_workbook() -> BytesIO:
     workbook.save(stream)
     stream.seek(0)
     return stream
+
+
+def test_tally_bridge_profile_and_diagnostics_flow() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+
+        home = client.get("/tally-bridge")
+        assert home.status_code == 200
+        assert "Tally Bridge" in home.get_data(as_text=True)
+
+        save_profile = client.post(
+            "/tally-bridge/profile",
+            data={
+                "name": "Main Tally",
+                "connection_mode": "hybrid",
+                "company_name": "DALA HQ",
+                "tally_version": "Tally Prime 4.1",
+                "endpoint_url": "http://127.0.0.1:9000",
+                "machine_name": "Ops-PC",
+                "profile_xml_http": "yes",
+                "profile_outbound_import": "yes",
+                "profile_register_fetch": "no",
+                "notes": "Initial bridge test",
+            },
+            follow_redirects=False,
+        )
+        assert save_profile.status_code == 302
+        assert save_profile.headers["Location"].endswith("/tally-bridge")
+
+        with app.app_context():
+            profile = db.session.query(TallyBridgeProfile).one()
+            assert profile.name == "Main Tally"
+            assert profile.connection_mode == "hybrid"
+            assert profile.company_name == "DALA HQ"
+            assert profile.capabilities_json["xml_http"] == "yes"
+            profile_id = profile.id
+
+        create_run = client.post(
+            "/tally-bridge/diagnostics",
+            data={
+                "title": "March Linkage Check",
+                "profile_id": str(profile_id),
+                "notes": "Compare manual link and uploaded path",
+            },
+            follow_redirects=False,
+        )
+        assert create_run.status_code == 302
+        assert "/tally-bridge/diagnostics/" in create_run.headers["Location"]
+        run_id = create_run.headers["Location"].rstrip("/").split("/")[-1]
+
+        detail = client.get(create_run.headers["Location"])
+        assert detail.status_code == 200
+        assert "March Linkage Check" in detail.get_data(as_text=True)
+
+        upload_artifact = client.post(
+            f"/tally-bridge/diagnostics/{run_id}/artifacts",
+            data={
+                "artifact_group": "manual_linked",
+                "artifact_type": "xml_dump",
+                "description": "Manual linked voucher XML",
+                "artifact_file": (BytesIO(b"<ENVELOPE>linked</ENVELOPE>"), "manual-linked.xml"),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert upload_artifact.status_code == 302
+        assert upload_artifact.headers["Location"].endswith(f"/tally-bridge/diagnostics/{run_id}")
+
+        update_run = client.post(
+            f"/tally-bridge/diagnostics/{run_id}/assessment",
+            data={
+                "status": "bridge_mode_decided",
+                "manual_case_status": "linked",
+                "uploaded_case_status": "unlinked",
+                "xml_http_supported": "yes",
+                "outbound_import_supported": "yes",
+                "register_fetch_supported": "yes",
+                "dn_link_supported": "yes",
+                "findings_summary": "Native bridge should work here.",
+                "notes": "Tally accepts full round-trip evidence.",
+            },
+            follow_redirects=False,
+        )
+        assert update_run.status_code == 302
+        assert update_run.headers["Location"].endswith(f"/tally-bridge/diagnostics/{run_id}")
+
+        with app.app_context():
+            run = db.session.get(TallyDiagnosticsRun, run_id)
+            artifacts = db.session.query(TallyDiagnosticsArtifact).filter_by(run_id=run_id).all()
+            assert run is not None
+            assert run.status == "bridge_mode_decided"
+            assert run.recommended_mode == "xml_http"
+            assert run.manual_case_status == "linked"
+            assert run.uploaded_case_status == "unlinked"
+            assert len(artifacts) == 1
+            artifact = artifacts[0]
+            artifact_id = artifact.id
+            artifact_path = Path(artifact.storage_path)
+            assert artifact.filename == "manual-linked.xml"
+            assert artifact_path.exists()
+
+        download = client.get(f"/tally-bridge/artifacts/{artifact_id}/download")
+        assert download.status_code == 200
+        assert download.data == b"<ENVELOPE>linked</ENVELOPE>"
+
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
 
 
 def build_stock_category_summary_workbook() -> BytesIO:

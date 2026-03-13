@@ -100,6 +100,70 @@ class InvoiceRoutingEntry(db.Model):
     routing_import = db.relationship("InvoiceRoutingImport", back_populates="entries")
 
 
+class TallyBridgeProfile(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+    connection_mode = db.Column(db.String(32), nullable=False, default="manual_fallback")
+    company_name = db.Column(db.String(255), nullable=True)
+    tally_version = db.Column(db.String(255), nullable=True)
+    endpoint_url = db.Column(db.String(255), nullable=True)
+    machine_name = db.Column(db.String(255), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    last_checked_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    capabilities_json = db.Column(db.JSON, nullable=False, default=dict)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+    diagnostics_runs = db.relationship(
+        "TallyDiagnosticsRun",
+        back_populates="profile",
+        order_by="TallyDiagnosticsRun.created_at.desc()",
+    )
+
+
+class TallyDiagnosticsRun(db.Model):
+    id = db.Column(db.String(32), primary_key=True)
+    profile_id = db.Column(db.Integer, db.ForeignKey("tally_bridge_profile.id"), nullable=True, index=True)
+    title = db.Column(db.String(255), nullable=False)
+    status = db.Column(db.String(32), nullable=False, default="draft", index=True)
+    recommended_mode = db.Column(db.String(32), nullable=True)
+    xml_http_supported = db.Column(db.String(16), nullable=False, default="unknown")
+    outbound_import_supported = db.Column(db.String(16), nullable=False, default="unknown")
+    register_fetch_supported = db.Column(db.String(16), nullable=False, default="unknown")
+    dn_link_supported = db.Column(db.String(16), nullable=False, default="unknown")
+    manual_case_status = db.Column(db.String(32), nullable=False, default="missing")
+    uploaded_case_status = db.Column(db.String(32), nullable=False, default="missing")
+    findings_summary = db.Column(db.Text, nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    profile = db.relationship("TallyBridgeProfile", back_populates="diagnostics_runs")
+    artifacts = db.relationship(
+        "TallyDiagnosticsArtifact",
+        back_populates="diagnostics_run",
+        cascade="all, delete-orphan",
+        order_by="TallyDiagnosticsArtifact.created_at.desc(), TallyDiagnosticsArtifact.id.desc()",
+    )
+
+
+class TallyDiagnosticsArtifact(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    run_id = db.Column(db.String(32), db.ForeignKey("tally_diagnostics_run.id"), nullable=False, index=True)
+    artifact_group = db.Column(db.String(32), nullable=False, default="other")
+    artifact_type = db.Column(db.String(64), nullable=False)
+    filename = db.Column(db.String(255), nullable=False)
+    content_type = db.Column(db.String(255), nullable=True)
+    storage_path = db.Column(db.String(512), nullable=False)
+    description = db.Column(db.String(255), nullable=True)
+    file_size = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+
+    diagnostics_run = db.relationship("TallyDiagnosticsRun", back_populates="artifacts")
+
+
 class AuditEvent(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     module_name = db.Column(db.String(64), nullable=False, index=True)
