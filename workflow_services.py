@@ -19,6 +19,7 @@ from services import (
     ProductMatch,
     apply_invoice_classification_to_record,
     build_prefixed_reference,
+    invoice_category_parts,
     load_brand_partner_rules,
     normalize_sku,
     resolve_product_match,
@@ -67,6 +68,8 @@ VAT_RATE = Decimal("7.5")
 CASE_UNITS = {"case", "cases", "ctn", "carton", "cartons"}
 SALES_ORDER_CATEGORY_COLORS = {
     "BP": {"row_fill": "FFF5E3", "key_fill": "FFC28A25", "key_font": "FFFDF7"},
+    "BPVT": {"row_fill": "FFF7E5", "key_fill": "FFD39A22", "key_font": "FFFDF7"},
+    "BPNV": {"row_fill": "FFF4EAF2", "key_fill": "FF9B5B85", "key_font": "FFFFFFFF"},
     "VT": {"row_fill": "E4F7F9", "key_fill": "FF0A7787", "key_font": "FFFFFFFF"},
     "NV": {"row_fill": "F7EEF4", "key_fill": "FF8A5C78", "key_font": "FFFFFFFF"},
 }
@@ -268,6 +271,7 @@ def create_sku_automator_run(file_storage: Any) -> SkuAutomatorRun:
 
         run.line_count += 1
         parsed_category, parsed_reference = split_prefixed_reference(current_header["order_reference_no"])
+        _, parsed_owner, parsed_tax_bucket = invoice_category_parts(parsed_category)
         line = SkuAutomatorLine(
             run_id=run.id,
             order_date=current_header["order_date"],
@@ -278,6 +282,8 @@ def create_sku_automator_run(file_storage: Any) -> SkuAutomatorRun:
             normalized_source_sku=normalize_sku(source_sku),
             source_value=source_value,
             raw_reference_no=parsed_reference or (current_header["order_reference_no"] or None),
+            invoice_owner=parsed_owner,
+            tax_bucket=parsed_tax_bucket,
             invoice_category=parsed_category,
             prefixed_reference_no=(current_header["order_reference_no"] or None) if parsed_category else None,
             classification_source="prefixed_reference" if parsed_category else None,

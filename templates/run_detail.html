@@ -17,7 +17,7 @@
       <div>
         <p class="eyebrow">Dispatch split</p>
         <h2>{{ summary.run.invoice_date }}</h2>
-        <p class="module-copy">This run is already separated into Brand Partner, VAT, and Non-VAT buckets. Keep the accounting path clean by downloading only the category you need for posting.</p>
+        <p class="module-copy">This run now separates invoice owner and tax path together, so DALA and Brand Partner rows stay split while VAT and Non-VAT remain compliant.</p>
       </div>
       <div class="module-meta-grid delivery-run-meters">
         <div class="meter">
@@ -34,9 +34,10 @@
         </div>
       </div>
       <div class="chip-row">
-        <span class="invoice-pill invoice-pill-bp">BP {{ summary.category_counts['BP'] }}</span>
         <span class="invoice-pill invoice-pill-vt">VT {{ summary.category_counts['VT'] }}</span>
         <span class="invoice-pill invoice-pill-nv">NV {{ summary.category_counts['NV'] }}</span>
+        <span class="invoice-pill invoice-pill-bpvt">BPVT {{ summary.category_counts['BPVT'] }}</span>
+        <span class="invoice-pill invoice-pill-bpnv">BPNV {{ summary.category_counts['BPNV'] }}</span>
       </div>
     </article>
 
@@ -60,9 +61,10 @@
         </div>
       {% else %}
         {% set category_cards = [
-          ('BP', 'Brand Partner', 'Inventory-linked partner lines that should stay separated from normal invoice posting.', 'invoice-pill-bp', 'invoice-button-bp'),
-          ('VT', 'VAT', 'Rows that should move with VAT enabled and remain grouped in the VAT delivery note flow.', 'invoice-pill-vt', 'invoice-button-vt'),
-          ('NV', 'Non-VAT', 'Rows that must stay outside the VAT invoice path while preserving the same run reference.', 'invoice-pill-nv', 'invoice-button-nv'),
+          ('VT', 'DALA VAT', 'Rows owned by DALA that should move with VAT enabled in the normal delivery note path.', 'invoice-pill-vt', 'invoice-button-vt'),
+          ('NV', 'DALA Non-VAT', 'Rows owned by DALA that must stay outside the VAT invoice path.', 'invoice-pill-nv', 'invoice-button-nv'),
+          ('BPVT', 'Brand Partner VAT', 'Partner-owned rows that are still VATable and must stay in the Brand Partner VAT bucket.', 'invoice-pill-bpvt', 'invoice-button-bpvt'),
+          ('BPNV', 'Brand Partner Non-VAT', 'Partner-owned rows that stay outside VAT while remaining separated from DALA invoices.', 'invoice-pill-bpnv', 'invoice-button-bpnv'),
         ] %}
         <div class="delivery-category-grid">
           {% for code, title, copy, pill_class, button_class in category_cards %}

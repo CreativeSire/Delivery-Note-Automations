@@ -6,8 +6,8 @@
   <section class="hero-band">
     <div>
       <p class="eyebrow">Database · Brand Partner rules</p>
-      <h1>Control which SKU and store combinations turn into <code>BP-</code>.</h1>
-      <p class="page-copy">Keep BP logic explicit here, test it before it reaches Sales Order or Delivery Note, and make the reasoning visible to the team.</p>
+      <h1>Control which SKU and store combinations route to Brand Partner ownership.</h1>
+      <p class="page-copy">Keep BP ownership logic explicit here, test it before it reaches Sales Order or Delivery Note, and let the system derive <code>BPVT-</code> or <code>BPNV-</code> from the product VAT truth.</p>
     </div>
     <div class="actions">
       <a class="secondary-button" href="{{ url_for('product_master') }}">Back to Database</a>
@@ -46,7 +46,7 @@
       <div class="module-head compact">
         <div>
           <p class="eyebrow">Rule tester</p>
-          <h2>Would this row classify as BP?</h2>
+          <h2>How would this row route?</h2>
         </div>
       </div>
       <form class="form-stack" action="{{ url_for('preview_brand_partner_rule') }}" method="post">
@@ -79,13 +79,17 @@
         <div class="delivery-run-empty">
           <span class="invoice-pill invoice-pill-{{ (preview.invoice_category or 'pending')|lower }}">{{ preview.invoice_category or 'No match' }}</span>
           <h3>{{ preview.prefixed_reference_no or 'No prefixed reference yet' }}</h3>
+          <p class="subtle-note">
+            Owner: {{ preview.invoice_owner or 'Pending' }}
+            {% if preview.tax_bucket %} · Tax bucket: {{ preview.tax_bucket }}{% endif %}
+          </p>
           <p class="empty-state">
             {% if preview.classification_source == 'bp_rule' %}
-              Matched a BP rule{% if preview.bp_rule_reason %}: {{ preview.bp_rule_reason }}{% endif %}.
+              Matched a Brand Partner rule{% if preview.bp_rule_reason %}: {{ preview.bp_rule_reason }}{% endif %}.
             {% elif preview.classification_source == 'product_vat' %}
-              No BP rule matched, so the fallback product VAT setting would make this {{ preview.invoice_category }}.
+              No BP rule matched, so the fallback product VAT setting would keep this in the DALA {{ preview.tax_bucket }} bucket.
             {% else %}
-              No BP rule matched yet. Add a rule if this line should become BP.
+              No BP rule matched yet. Add a rule if this line should be owned by Brand Partner.
             {% endif %}
           </p>
         </div>

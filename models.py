@@ -116,6 +116,8 @@ class UploadLine(db.Model):
     resolved_rate = db.Column(db.Numeric(14, 4), nullable=True)
     resolved_vatable = db.Column(db.Boolean, nullable=False, default=False)
     raw_reference_no = db.Column(db.String(128), nullable=True)
+    invoice_owner = db.Column(db.String(8), nullable=True, index=True)
+    tax_bucket = db.Column(db.String(8), nullable=True, index=True)
     invoice_category = db.Column(db.String(8), nullable=True, index=True)
     prefixed_reference_no = db.Column(db.String(160), nullable=True)
     classification_source = db.Column(db.String(64), nullable=True)
@@ -162,6 +164,8 @@ class SalesOrderLine(db.Model):
     resolved_amount = db.Column(db.Numeric(14, 4), nullable=True)
     resolved_vatable = db.Column(db.Boolean, nullable=False, default=False)
     raw_reference_no = db.Column(db.String(128), nullable=True)
+    invoice_owner = db.Column(db.String(8), nullable=True, index=True)
+    tax_bucket = db.Column(db.String(8), nullable=True, index=True)
     invoice_category = db.Column(db.String(8), nullable=True, index=True)
     prefixed_reference_no = db.Column(db.String(160), nullable=True)
     classification_source = db.Column(db.String(64), nullable=True)
@@ -205,6 +209,8 @@ class SkuAutomatorLine(db.Model):
     resolved_quantity = db.Column(db.Numeric(14, 4), nullable=True)
     resolved_rate = db.Column(db.Numeric(14, 4), nullable=True)
     raw_reference_no = db.Column(db.String(128), nullable=True)
+    invoice_owner = db.Column(db.String(8), nullable=True, index=True)
+    tax_bucket = db.Column(db.String(8), nullable=True, index=True)
     invoice_category = db.Column(db.String(8), nullable=True, index=True)
     prefixed_reference_no = db.Column(db.String(160), nullable=True)
     classification_source = db.Column(db.String(64), nullable=True)
@@ -484,6 +490,8 @@ class LoadingTrackerRowItem(db.Model):
     sku_name = db.Column(db.String(255), nullable=False)
     quantity = db.Column(db.Numeric(14, 4), nullable=False, default=0)
     raw_reference_no = db.Column(db.String(128), nullable=True)
+    invoice_owner = db.Column(db.String(8), nullable=True, index=True)
+    tax_bucket = db.Column(db.String(8), nullable=True, index=True)
     invoice_category = db.Column(db.String(8), nullable=True, index=True)
     prefixed_reference_no = db.Column(db.String(160), nullable=True)
     classification_source = db.Column(db.String(64), nullable=True)
@@ -495,6 +503,8 @@ class LoadingTrackerRowItem(db.Model):
 RUNTIME_SCHEMA_UPDATES = {
     "upload_line": {
         "raw_reference_no": "VARCHAR(128)",
+        "invoice_owner": "VARCHAR(8)",
+        "tax_bucket": "VARCHAR(8)",
         "invoice_category": "VARCHAR(8)",
         "prefixed_reference_no": "VARCHAR(160)",
         "classification_source": "VARCHAR(64)",
@@ -502,6 +512,8 @@ RUNTIME_SCHEMA_UPDATES = {
     },
     "sales_order_line": {
         "raw_reference_no": "VARCHAR(128)",
+        "invoice_owner": "VARCHAR(8)",
+        "tax_bucket": "VARCHAR(8)",
         "invoice_category": "VARCHAR(8)",
         "prefixed_reference_no": "VARCHAR(160)",
         "classification_source": "VARCHAR(64)",
@@ -509,6 +521,8 @@ RUNTIME_SCHEMA_UPDATES = {
     },
     "sku_automator_line": {
         "raw_reference_no": "VARCHAR(128)",
+        "invoice_owner": "VARCHAR(8)",
+        "tax_bucket": "VARCHAR(8)",
         "invoice_category": "VARCHAR(8)",
         "prefixed_reference_no": "VARCHAR(160)",
         "classification_source": "VARCHAR(64)",
@@ -516,6 +530,8 @@ RUNTIME_SCHEMA_UPDATES = {
     },
     "loading_tracker_row_item": {
         "raw_reference_no": "VARCHAR(128)",
+        "invoice_owner": "VARCHAR(8)",
+        "tax_bucket": "VARCHAR(8)",
         "invoice_category": "VARCHAR(8)",
         "prefixed_reference_no": "VARCHAR(160)",
         "classification_source": "VARCHAR(64)",

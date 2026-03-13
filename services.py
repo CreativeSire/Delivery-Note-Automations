@@ -48,10 +48,22 @@ VAT_LABEL = "VAT"
 VAT_RATE = Decimal("7.5")
 SEED_UOM_PATH = Path(__file__).resolve().parent / "data" / "latest_uom_seed.csv"
 INVALID_FILENAME_CHARS = r'[<>:"/\\|?*\x00-\x1f]'
-INVOICE_CATEGORY_BP = "BP"
+INVOICE_OWNER_DALA = "DALA"
+INVOICE_OWNER_BP = "BP"
+TAX_BUCKET_VT = "VT"
+TAX_BUCKET_NV = "NV"
 INVOICE_CATEGORY_VT = "VT"
 INVOICE_CATEGORY_NV = "NV"
-INVOICE_CATEGORIES = {INVOICE_CATEGORY_BP, INVOICE_CATEGORY_VT, INVOICE_CATEGORY_NV}
+INVOICE_CATEGORY_BPVT = "BPVT"
+INVOICE_CATEGORY_BPNV = "BPNV"
+LEGACY_INVOICE_CATEGORY_BP = "BP"
+INVOICE_EXPORT_CATEGORIES = [
+    INVOICE_CATEGORY_VT,
+    INVOICE_CATEGORY_NV,
+    INVOICE_CATEGORY_BPVT,
+    INVOICE_CATEGORY_BPNV,
+]
+INVOICE_CATEGORIES = set(INVOICE_EXPORT_CATEGORIES + [LEGACY_INVOICE_CATEGORY_BP])
 
 
 class ServiceError(Exception):
@@ -83,6 +95,8 @@ class ProductMatch:
 @dataclass
 class InvoiceClassification:
     raw_reference_no: str
+    invoice_owner: str | None
+    tax_bucket: str | None
     invoice_category: str | None
     prefixed_reference_no: str | None
     classification_source: str | None
@@ -174,6 +188,8 @@ def preview_brand_partner_classification(
         "sku_name": sku_name,
         "store_name": store_name or "",
         "raw_reference_no": raw_reference_no or "",
+        "invoice_owner": classification.invoice_owner or "",
+        "tax_bucket": classification.tax_bucket or "",
         "product": product,
         "invoice_category": classification.invoice_category or "",
         "prefixed_reference_no": classification.prefixed_reference_no or "",
@@ -658,6 +674,7 @@ def create_tracker_run(file_storage: Any, timezone_name: str) -> UploadRun:
 
             run.rows_detected += 1
             parsed_category, parsed_reference = split_prefixed_reference(order_number)
+            _, parsed_owner, parsed_tax_bucket = invoice_category_parts(parsed_category)
             line = UploadLine(
                 run_id=run.id,
                 order_number=order_number,
@@ -666,6 +683,8 @@ def create_tracker_run(file_storage: Any, timezone_name: str) -> UploadRun:
                 normalized_source_sku=normalize_sku(sku_name),
                 quantity=quantity,
                 raw_reference_no=parsed_reference or order_number,
+                invoice_owner=parsed_owner,
+                tax_bucket=parsed_tax_bucket,
                 invoice_category=parsed_category,
                 prefixed_reference_no=order_number if parsed_category else None,
                 classification_source="prefixed_reference" if parsed_category else None,
@@ -744,7 +763,7 @@ def build_run_summary(run_id: str) -> RunSummary | None:
     )
     category_counts = {
         category: sum(1 for line in ready_line_items if line.invoice_category == category)
-        for category in [INVOICE_CATEGORY_BP, INVOICE_CATEGORY_VT, INVOICE_CATEGORY_NV]
+        for category in INVOICE_EXPORT_CATEGORIES
     }
     return RunSummary(
         run=run,
@@ -883,6 +902,8 @@ def mark_source_sku_inactive(run_id: str, source_sku: str) -> tuple[UploadRun, P
         line.resolved_sku_name = product.sku_name
         line.resolved_rate = None
         line.resolved_vatable = False
+        line.invoice_owner = None
+        line.tax_bucket = None
         line.invoice_category = None
         line.prefixed_reference_no = None
         line.classification_source = None
@@ -1270,7 +1291,7 @@ def split_prefixed_reference(value: str | None) -> tuple[str | None, str]:
     if not text:
         return None, ""
     upper = text.upper()
-    for category in sorted(INVOICE_CATEGORIES):
+    for category in [INVOICE_CATEGORY_BPVT, INVOICE_CATEGORY_BPNV, LEGACY_INVOICE_CATEGORY_BP, INVOICE_CATEGORY_VT, INVOICE_CATEGORY_NV]:
         prefix = f"{category}-"
         if upper.startswith(prefix):
             return category, text[len(prefix) :].strip()
@@ -1283,6 +1304,38 @@ def build_prefixed_reference(invoice_category: str | None, raw_reference_no: str
     if not category or category not in INVOICE_CATEGORIES or not raw_reference:
         return None
     return f"{category}-{raw_reference}"
+
+
+def invoice_category_parts(invoice_category: str | None) -> tuple[str | None, str | None, str | None]:
+    category = _string_value(invoice_category).upper()
+    if category == INVOICE_CATEGORY_VT:
+        return category, INVOICE_OWNER_DALA, TAX_BUCKET_VT
+    if category == INVOICE_CATEGORY_NV:
+        return category, INVOICE_OWNER_DALA, TAX_BUCKET_NV
+    if category == INVOICE_CATEGORY_BPVT:
+        return category, INVOICE_OWNER_BP, TAX_BUCKET_VT
+    if category == INVOICE_CATEGORY_BPNV:
+        return category, INVOICE_OWNER_BP, TAX_BUCKET_NV
+    if category == LEGACY_INVOICE_CATEGORY_BP:
+        return category, INVOICE_OWNER_BP, None
+    return None, None, None
+
+
+def build_invoice_category(invoice_owner: str | None, tax_bucket: str | None) -> str | None:
+    owner = _string_value(invoice_owner).upper()
+    bucket = _string_value(tax_bucket).upper()
+    if owner == INVOICE_OWNER_BP:
+        if bucket == TAX_BUCKET_VT:
+            return INVOICE_CATEGORY_BPVT
+        if bucket == TAX_BUCKET_NV:
+            return INVOICE_CATEGORY_BPNV
+        return LEGACY_INVOICE_CATEGORY_BP
+    if owner == INVOICE_OWNER_DALA:
+        if bucket == TAX_BUCKET_VT:
+            return INVOICE_CATEGORY_VT
+        if bucket == TAX_BUCKET_NV:
+            return INVOICE_CATEGORY_NV
+    return None
 
 
 def normalize_invoice_rule_key(value: str | None) -> list[str]:
@@ -1309,11 +1362,17 @@ def classify_invoice_line(
 ) -> InvoiceClassification:
     raw_reference = _string_value(raw_reference_no)
     existing = _string_value(existing_category).upper()
-    if existing in INVOICE_CATEGORIES:
-        prefixed_reference = existing_prefixed_reference_no or build_prefixed_reference(existing, raw_reference)
+    existing_category_name, existing_owner, existing_tax_bucket = invoice_category_parts(existing)
+    if existing_category_name == LEGACY_INVOICE_CATEGORY_BP and product is not None:
+        existing_tax_bucket = TAX_BUCKET_VT if product.vatable else TAX_BUCKET_NV
+        existing_category_name = build_invoice_category(existing_owner, existing_tax_bucket)
+    if existing_category_name in INVOICE_CATEGORIES:
+        prefixed_reference = existing_prefixed_reference_no or build_prefixed_reference(existing_category_name, raw_reference)
         return InvoiceClassification(
             raw_reference_no=raw_reference,
-            invoice_category=existing,
+            invoice_owner=existing_owner,
+            tax_bucket=existing_tax_bucket,
+            invoice_category=existing_category_name,
             prefixed_reference_no=prefixed_reference,
             classification_source="prefixed_reference",
             bp_rule_reason=None,
@@ -1321,6 +1380,7 @@ def classify_invoice_line(
 
     resolved_sku_name = _string_value(sku_name or (product.sku_name if product is not None else ""))
     rules = bp_rules if bp_rules is not None else load_brand_partner_rules()
+    matched_bp_reason: str | None = None
     for rule in rules:
         if not rule.is_active:
             continue
@@ -1328,27 +1388,38 @@ def classify_invoice_line(
             continue
         if rule.store_name_pattern and not _tokens_match_rule(store_name, rule.store_name_pattern):
             continue
-        reason = rule.rule_name or rule.store_name_pattern or rule.sku_name_pattern
-        return InvoiceClassification(
-            raw_reference_no=raw_reference,
-            invoice_category=INVOICE_CATEGORY_BP,
-            prefixed_reference_no=build_prefixed_reference(INVOICE_CATEGORY_BP, raw_reference),
-            classification_source="bp_rule",
-            bp_rule_reason=reason,
-        )
+        matched_bp_reason = rule.rule_name or rule.store_name_pattern or rule.sku_name_pattern
+        break
 
     if product is not None:
-        category = INVOICE_CATEGORY_VT if product.vatable else INVOICE_CATEGORY_NV
+        tax_bucket = TAX_BUCKET_VT if product.vatable else TAX_BUCKET_NV
+        invoice_owner = INVOICE_OWNER_BP if matched_bp_reason else INVOICE_OWNER_DALA
+        category = build_invoice_category(invoice_owner, tax_bucket)
         return InvoiceClassification(
             raw_reference_no=raw_reference,
+            invoice_owner=invoice_owner,
+            tax_bucket=tax_bucket,
             invoice_category=category,
             prefixed_reference_no=build_prefixed_reference(category, raw_reference),
-            classification_source="product_vat",
-            bp_rule_reason=None,
+            classification_source="bp_rule" if matched_bp_reason else "product_vat",
+            bp_rule_reason=matched_bp_reason,
+        )
+
+    if matched_bp_reason:
+        return InvoiceClassification(
+            raw_reference_no=raw_reference,
+            invoice_owner=INVOICE_OWNER_BP,
+            tax_bucket=None,
+            invoice_category=LEGACY_INVOICE_CATEGORY_BP,
+            prefixed_reference_no=build_prefixed_reference(LEGACY_INVOICE_CATEGORY_BP, raw_reference),
+            classification_source="bp_rule",
+            bp_rule_reason=matched_bp_reason,
         )
 
     return InvoiceClassification(
         raw_reference_no=raw_reference,
+        invoice_owner=None,
+        tax_bucket=None,
         invoice_category=None,
         prefixed_reference_no=existing_prefixed_reference_no or None,
         classification_source=None,
@@ -1379,6 +1450,8 @@ def apply_invoice_classification_to_record(
         or getattr(record, "order_reference_no", None),
     )
     record.raw_reference_no = classification.raw_reference_no or None
+    record.invoice_owner = classification.invoice_owner
+    record.tax_bucket = classification.tax_bucket
     record.invoice_category = classification.invoice_category
     record.prefixed_reference_no = classification.prefixed_reference_no
     record.classification_source = classification.classification_source

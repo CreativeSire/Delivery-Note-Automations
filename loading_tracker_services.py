@@ -45,6 +45,7 @@ from services import (
     apply_invoice_classification_to_record,
     apply_product_to_line,
     build_prefixed_reference,
+    invoice_category_parts,
     load_brand_partner_rules,
     resolve_product_match,
     split_prefixed_reference,
@@ -1596,7 +1597,11 @@ def create_delivery_note_run_from_loading_day(import_id: str, day_name: str, tim
                 continue
             run.rows_detected += 1
             item_reference = item.raw_reference_no or planning_ref
-            prefixed_reference = item.prefixed_reference_no or build_prefixed_reference(item.invoice_category, item_reference)
+            item_category, item_owner, item_tax_bucket = invoice_category_parts(item.invoice_category)
+            prefixed_reference = item.prefixed_reference_no or build_prefixed_reference(
+                item_category or item.invoice_category,
+                item_reference,
+            )
             line = UploadLine(
                 run_id=run.id,
                 order_number=prefixed_reference or item_reference,
@@ -1605,7 +1610,9 @@ def create_delivery_note_run_from_loading_day(import_id: str, day_name: str, tim
                 normalized_source_sku=_normalize_text(item.sku_name).upper(),
                 quantity=quantity,
                 raw_reference_no=item_reference,
-                invoice_category=item.invoice_category or None,
+                invoice_owner=item.invoice_owner or item_owner,
+                tax_bucket=item.tax_bucket or item_tax_bucket,
+                invoice_category=item_category or item.invoice_category or None,
                 prefixed_reference_no=prefixed_reference or None,
                 classification_source=item.classification_source or None,
                 bp_rule_reason=item.bp_rule_reason or None,
@@ -1690,12 +1697,15 @@ def _save_row_record(
     db.session.add(record)
 
     for item in row_data.get("items", []):
+        item_category, item_owner, item_tax_bucket = invoice_category_parts(item.get("invoice_category"))
         record.items.append(
             LoadingTrackerRowItem(
                 sku_name=item["sku"],
                 quantity=_decimal_or_none(item["quantity"]) or Decimal("0"),
                 raw_reference_no=item.get("raw_reference_no") or None,
-                invoice_category=item.get("invoice_category") or None,
+                invoice_owner=item.get("invoice_owner") or item_owner,
+                tax_bucket=item.get("tax_bucket") or item_tax_bucket,
+                invoice_category=item_category or item.get("invoice_category") or None,
                 prefixed_reference_no=item.get("prefixed_reference_no") or None,
                 classification_source=item.get("classification_source") or None,
                 bp_rule_reason=item.get("bp_rule_reason") or None,
@@ -1788,6 +1798,8 @@ def _serialize_row(row: LoadingTrackerRow) -> dict[str, Any]:
         {
             "sku": item.sku_name,
             "quantity": round(_float_value(item.quantity), 2),
+            "invoice_owner": item.invoice_owner or "",
+            "tax_bucket": item.tax_bucket or "",
             "invoice_category": item.invoice_category or "",
             "raw_reference_no": item.raw_reference_no or "",
             "prefixed_reference_no": item.prefixed_reference_no or "",
@@ -1888,6 +1900,8 @@ def _group_sku_automator_store_rows(lines: list[SkuAutomatorLine]) -> list[dict[
                 {
                     "sku": sku_name,
                     "quantity": 0.0,
+                    "invoice_owner": line.invoice_owner or "",
+                    "tax_bucket": line.tax_bucket or "",
                     "invoice_category": line.invoice_category or "",
                     "prefixed_reference_no": line.prefixed_reference_no or "",
                     "raw_reference_no": line.raw_reference_no or "",
@@ -1904,6 +1918,8 @@ def _group_sku_automator_store_rows(lines: list[SkuAutomatorLine]) -> list[dict[
             {
                 "sku": item["sku"],
                 "quantity": round(item["quantity"], 2),
+                "invoice_owner": item["invoice_owner"],
+                "tax_bucket": item["tax_bucket"],
                 "invoice_category": item["invoice_category"],
                 "prefixed_reference_no": item["prefixed_reference_no"],
                 "raw_reference_no": item["raw_reference_no"],
@@ -2040,7 +2056,11 @@ def _row_items_text(row: LoadingTrackerRow | None) -> str:
         if quantity <= 0:
             continue
         line = f"{item.sku_name} = {quantity:g}"
-        reference = item.prefixed_reference_no or build_prefixed_reference(item.invoice_category, item.raw_reference_no)
+        item_category, _, _ = invoice_category_parts(item.invoice_category)
+        reference = item.prefixed_reference_no or build_prefixed_reference(
+            item_category or item.invoice_category,
+            item.raw_reference_no,
+        )
         if reference:
             line += f" | {reference}"
         items.append(line)
@@ -2080,7 +2100,7 @@ def _parse_items_text(text: str) -> list[dict[str, Any]]:
                 invoice_category = category
                 raw_reference_no = stripped_reference
                 prefixed_reference_no = metadata_parts[1]
-            elif metadata_parts[1].upper() in {"BP", "VT", "NV"}:
+            elif metadata_parts[1].upper() in {"BP", "VT", "NV", "BPVT", "BPNV"}:
                 invoice_category = metadata_parts[1].upper()
                 if len(metadata_parts) >= 3:
                     raw_reference_no = metadata_parts[2]
