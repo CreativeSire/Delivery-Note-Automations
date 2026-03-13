@@ -543,6 +543,139 @@ def build_pepup_orders_tab_delimited_export() -> BytesIO:
     return BytesIO(payload.encode("utf-8"))
 
 
+def build_pepup_orders_txt_export_with_short_dates() -> BytesIO:
+    rows = [
+        [
+            "Date of Order",
+            "Time of Order",
+            "Order Number",
+            "Total Invoice Amount",
+            "Total Number Of Item",
+            "Distributor Name",
+            "Distributor Code",
+            "Distributor Type",
+            "Zone",
+            "State",
+            "City",
+            "Salesman Name",
+            "Salesman Code",
+            "Reporting To",
+            "Retailer Name",
+            "Retailer Code",
+            "Retailer Market",
+            "Retailer Address",
+            "Retailer Group",
+            "Retailer Channel",
+            "Retailer Classification",
+            "Retailer Type",
+            "Retailer Phone No",
+            "Display Outlet",
+            "Comments",
+            "Item Remark",
+            "Reason",
+            "Order Status",
+            "Order By",
+            "Item Name",
+            "Item Code",
+            "Item Grade",
+            "Category",
+            "Brand",
+            "UOM",
+            "Quantity",
+            "Price",
+            "Total",
+            "Delivery Date",
+            "Order Distance",
+        ],
+        [
+            "12-Mar-26",
+            "11:16",
+            "17575653",
+            "105000.00",
+            "1",
+            "Dala",
+            "32461",
+            "",
+            "",
+            "Lagos",
+            "Ikorodu Lga",
+            "Folorunso Omotola",
+            "15945",
+            "Kehinde Ilori",
+            "Grocery Bazaar IKORODU ODOGUNYAN",
+            "1554545",
+            "Reg 7a",
+            "128 Ikorodu/Shagamu Road",
+            "",
+            "CORP",
+            "Tier-2",
+            "CORP",
+            "7083376840",
+            "",
+            "Attached LPO",
+            "YES",
+            "",
+            "New Adhoc Order",
+            "Salesman",
+            "SKU Alpha",
+            "WJC3",
+            "",
+            "Juice",
+            "BP Wilsons",
+            "cases",
+            "2",
+            "100.00",
+            "200.00",
+            "",
+            "1.3 KM",
+        ],
+        [
+            "12-Mar-26",
+            "11:08",
+            "17575278",
+            "60.00",
+            "1",
+            "Dala",
+            "32461",
+            "",
+            "",
+            "Lagos",
+            "Ikeja Lga",
+            "Folorunso Omotola",
+            "15945",
+            "Kehinde Ilori",
+            "Justrite OJODU",
+            "1554689",
+            "Reg 3a",
+            "Ojodu Suit",
+            "",
+            "CORP",
+            "Tier-1",
+            "CORP",
+            "8073893447",
+            "",
+            "Attached PO",
+            "",
+            "",
+            "New Adhoc Order",
+            "Salesman",
+            "SKU Vanilla",
+            "WJC7",
+            "",
+            "Juice",
+            "BP Wilsons",
+            "pcs",
+            "6",
+            "10.00",
+            "60.00",
+            "",
+            "16.88 KM",
+        ],
+    ]
+    payload = "\n".join("\t".join(row) for row in rows)
+    return BytesIO(payload.encode("utf-8"))
+
+
 def build_tally_export_workbook() -> BytesIO:
     workbook = Workbook()
     sheet = workbook.active
@@ -2447,6 +2580,72 @@ def test_sales_order_run_accepts_tab_delimited_pepup_export_with_xls_extension()
         assert row3[4] == "SKU Vanilla"
         assert row3[5] == "0.5ctn"
         assert row3[7] == 60
+
+        with app.app_context():
+            run = db.session.get(SalesOrderRun, run_id)
+            assert run is not None
+            assert run.rows_ready == 2
+            assert run.rows_needing_review == 0
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_sales_order_run_accepts_tab_delimited_pepup_export_with_txt_extension() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        uom = Workbook()
+        sheet = uom.active
+        sheet.title = "UOM"
+        sheet.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
+        sheet.append(["SKU Alpha", "ctn", "pcs", 12, "Yes", 100])
+        sheet.append(["SKU Vanilla", "ctn", "pcs", 12, "No", 120])
+        uom_bytes = BytesIO()
+        uom.save(uom_bytes)
+        uom_bytes.seek(0)
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(uom_bytes.getvalue()), "uom.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        upload = client.post(
+            "/sales-order/import",
+            data={
+                "sales_order_workbook": (
+                    BytesIO(build_pepup_orders_txt_export_with_short_dates().getvalue()),
+                    "ORDER LIST FILTERED 12TH MAR.txt",
+                )
+            },
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert upload.status_code == 302
+        assert "/sales-order/runs/" in upload.headers["Location"]
+        assert "/review" not in upload.headers["Location"]
+
+        run_id = upload.headers["Location"].split("/sales-order/runs/")[1]
+        download = client.get(f"/sales-order/runs/{run_id}/download")
+        assert download.status_code == 200
+
+        workbook = load_workbook(BytesIO(download.data))
+        output = workbook["Sales Order"]
+        row2 = [output.cell(2, c).value for c in range(1, 13)]
+        row3 = [output.cell(3, c).value for c in range(1, 13)]
+
+        assert row2[0].date().isoformat() == "2026-03-12"
+        assert row2[1] == "VT-17575653"
+        assert row3[0].date().isoformat() == "2026-03-12"
+        assert row3[1] == "NV-17575278"
 
         with app.app_context():
             run = db.session.get(SalesOrderRun, run_id)

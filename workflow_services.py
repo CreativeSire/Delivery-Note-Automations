@@ -984,6 +984,8 @@ def _iso_date_value(value: Any) -> str:
             "%Y-%m-%d %H:%M:%S",
             "%d %b %Y",
             "%d %B %Y",
+            "%d-%b-%y",
+            "%d-%B-%y",
             "%d/%m/%Y",
             "%d-%m-%Y",
             "%d-%b-%Y",
