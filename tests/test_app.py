@@ -29,6 +29,7 @@ from models import (
     SkuAutomatorLine,
     SkuAutomatorRun,
     TallyBridgeProfile,
+    TallyBridgeRun,
     TallyDiagnosticsArtifact,
     TallyDiagnosticsRun,
     UomImportReview,
@@ -356,6 +357,153 @@ def test_tally_bridge_profile_and_diagnostics_flow() -> None:
         assert download.data == b"<ENVELOPE>linked</ENVELOPE>"
 
         with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_tally_bridge_outbound_run_can_prepare_and_stage_sales_order_payload() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        drop_dir = Path(temp_dir) / "tally-drop"
+        drop_dir.mkdir(parents=True, exist_ok=True)
+
+        uom = Workbook()
+        sheet = uom.active
+        sheet.title = "UOM"
+        sheet.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
+        sheet.append(["SKU Alpha", "ctn", "pcs", 12, "Yes", 100])
+        uom_bytes = BytesIO()
+        uom.save(uom_bytes)
+        uom_bytes.seek(0)
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(uom_bytes.getvalue()), "uom.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        sales = Workbook()
+        sales_sheet = sales.active
+        sales_sheet.title = "Order Item List"
+        sales_sheet.append(
+            [
+                "Date of Order",
+                "Time of Order",
+                "Order Number",
+                "Retailer Name",
+                "Item Name",
+                "UOM",
+                "Quantity",
+                "Price",
+                "Total",
+            ]
+        )
+        sales_sheet.append(
+            [
+                "2026-03-13 00:00:00",
+                "09:00:00",
+                "17599901",
+                "Sample Mart",
+                "SKU Alpha",
+                "cases",
+                2,
+                100,
+                200,
+            ]
+        )
+        sales_bytes = BytesIO()
+        sales.save(sales_bytes)
+        sales_bytes.seek(0)
+
+        upload = client.post(
+            "/sales-order/import",
+            data={"sales_order_workbook": (BytesIO(sales_bytes.getvalue()), "orders.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert upload.status_code == 302
+        run_id = upload.headers["Location"].split("/sales-order/runs/")[1]
+
+        profile_response = client.post(
+            "/tally-bridge/profile",
+            data={
+                "name": "Drop profile",
+                "connection_mode": "file_drop",
+                "company_name": "DALA",
+                "endpoint_url": str(drop_dir),
+                "profile_xml_http": "no",
+                "profile_outbound_import": "yes",
+                "profile_register_fetch": "no",
+            },
+            follow_redirects=False,
+        )
+        assert profile_response.status_code == 302
+
+        bridge_create = client.post(
+            "/tally-bridge/outbound",
+            data={"sales_order_run_id": run_id},
+            follow_redirects=False,
+        )
+        assert bridge_create.status_code == 302
+        assert "/tally-bridge/runs/" in bridge_create.headers["Location"]
+        bridge_run_id = bridge_create.headers["Location"].rstrip("/").split("/")[-1]
+
+        detail_page = client.get(bridge_create.headers["Location"])
+        assert detail_page.status_code == 200
+        assert "Move this package forward" in detail_page.get_data(as_text=True)
+
+        with app.app_context():
+            bridge_run = db.session.get(TallyBridgeRun, bridge_run_id)
+            assert bridge_run is not None
+            assert bridge_run.status == "ready_to_send"
+            assert bridge_run.bridge_mode == "file_drop"
+            assert Path(bridge_run.payload_storage_path).exists()
+            assert bridge_run.rows_ready == 1
+
+        stage = client.post(f"/tally-bridge/runs/{bridge_run_id}/stage", follow_redirects=False)
+        assert stage.status_code == 302
+        assert stage.headers["Location"].endswith(f"/tally-bridge/runs/{bridge_run_id}")
+
+        with app.app_context():
+            bridge_run = db.session.get(TallyBridgeRun, bridge_run_id)
+            assert bridge_run is not None
+            assert bridge_run.status == "staged_for_tally"
+            assert bridge_run.staged_storage_path is not None
+            staged_path = Path(bridge_run.staged_storage_path)
+            assert staged_path.exists()
+            assert staged_path.parent == drop_dir
+
+        update = client.post(
+            f"/tally-bridge/runs/{bridge_run_id}/status",
+            data={
+                "status": "confirmed_in_tally",
+                "notes": "Imported successfully in Tally.",
+                "error_message": "",
+            },
+            follow_redirects=False,
+        )
+        assert update.status_code == 302
+
+        download = client.get(f"/tally-bridge/runs/{bridge_run_id}/download")
+        assert download.status_code == 200
+        workbook = load_workbook(BytesIO(download.data))
+        output = workbook["Sales Order"]
+        assert output["B2"].value == "VT-17599901"
+
+        with app.app_context():
+            bridge_run = db.session.get(TallyBridgeRun, bridge_run_id)
+            assert bridge_run is not None
+            assert bridge_run.status == "confirmed_in_tally"
+            assert bridge_run.confirmed_at is not None
             db.session.remove()
             db.engine.dispose()
 

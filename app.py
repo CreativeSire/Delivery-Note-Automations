@@ -95,16 +95,22 @@ from workflow_services import (
 from tally_bridge_services import (
     ARTIFACT_GROUP_OPTIONS,
     ARTIFACT_TYPE_OPTIONS,
+    BRIDGE_RUN_STATUS_OPTIONS,
     CASE_STATUS_OPTIONS,
     CONNECTION_MODE_OPTIONS,
     RUN_STATUS_OPTIONS,
     YES_NO_UNKNOWN_OPTIONS,
     add_tally_diagnostics_artifact,
+    build_tally_bridge_run_detail,
     build_tally_bridge_summary,
+    create_tally_bridge_run_from_sales_order,
     build_tally_diagnostics_detail,
     create_tally_diagnostics_run,
+    get_tally_bridge_run,
     get_tally_diagnostics_artifact,
     save_tally_bridge_profile,
+    stage_tally_bridge_run_to_profile_target,
+    update_tally_bridge_run_status,
     update_tally_diagnostics_run,
 )
 
@@ -378,6 +384,110 @@ def create_app(test_config: dict | None = None) -> Flask:
         if not path.exists():
             abort(404)
         return send_file(path, as_attachment=True, download_name=artifact.filename, mimetype=artifact.content_type)
+
+    @app.post("/tally-bridge/outbound")
+    def create_tally_bridge_outbound_run() -> str:
+        sales_order_run_id = request.form.get("sales_order_run_id", "").strip()
+        profile_id_raw = request.form.get("profile_id", "").strip()
+        profile_id = int(profile_id_raw) if profile_id_raw.isdigit() else None
+        notes = request.form.get("notes", "").strip()
+        try:
+            run = create_tally_bridge_run_from_sales_order(
+                sales_order_run_id,
+                profile_id=profile_id,
+                notes=notes or None,
+            )
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            if sales_order_run_id:
+                return redirect(url_for("view_sales_order_run", run_id=sales_order_run_id))
+            return redirect(url_for("tally_bridge_home"))
+
+        record_audit_event(
+            module_name="Tally Bridge",
+            event_type="outbound_run_created",
+            entity_type="tally_bridge_run",
+            entity_id=run.id,
+            entity_name=run.payload_filename,
+            summary_text=f"Prepared Tally Bridge outbound package '{run.payload_filename}'.",
+            details={
+                "sales_order_run_id": run.sales_order_run_id,
+                "bridge_mode": run.bridge_mode,
+                "rows_ready": run.rows_ready,
+            },
+        )
+        db.session.commit()
+        flash("Tally Bridge package prepared from the Sales Order run.", "success")
+        return redirect(url_for("view_tally_bridge_run", run_id=run.id))
+
+    @app.get("/tally-bridge/runs/<run_id>")
+    def view_tally_bridge_run(run_id: str) -> str:
+        detail = build_tally_bridge_run_detail(run_id)
+        if detail is None:
+            abort(404)
+        summary = build_tally_bridge_summary()
+        return render_template(
+            "tally_bridge_outbound_detail.html",
+            summary=summary,
+            detail=detail,
+            bridge_run_status_options=BRIDGE_RUN_STATUS_OPTIONS,
+        )
+
+    @app.post("/tally-bridge/runs/<run_id>/stage")
+    def stage_tally_bridge_run_view(run_id: str) -> str:
+        try:
+            run = stage_tally_bridge_run_to_profile_target(run_id)
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("view_tally_bridge_run", run_id=run_id))
+
+        record_audit_event(
+            module_name="Tally Bridge",
+            event_type="outbound_run_staged",
+            entity_type="tally_bridge_run",
+            entity_id=run.id,
+            entity_name=run.payload_filename,
+            summary_text=f"Staged Tally payload '{run.payload_filename}' to the profile target.",
+            details={"bridge_mode": run.bridge_mode, "staged_path": run.staged_storage_path or ""},
+        )
+        db.session.commit()
+        flash("Tally payload staged to the profile target folder.", "success")
+        return redirect(url_for("view_tally_bridge_run", run_id=run.id))
+
+    @app.post("/tally-bridge/runs/<run_id>/status")
+    def update_tally_bridge_run_view(run_id: str) -> str:
+        try:
+            run = update_tally_bridge_run_status(run_id, dict(request.form))
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("view_tally_bridge_run", run_id=run_id))
+
+        record_audit_event(
+            module_name="Tally Bridge",
+            event_type="outbound_run_updated",
+            entity_type="tally_bridge_run",
+            entity_id=run.id,
+            entity_name=run.payload_filename,
+            summary_text=f"Updated Tally Bridge run '{run.payload_filename}' to {run.status.replace('_', ' ')}.",
+            details={
+                "status": run.status,
+                "bridge_mode": run.bridge_mode,
+                "error_message": run.error_message or "",
+            },
+        )
+        db.session.commit()
+        flash("Tally Bridge run status updated.", "success")
+        return redirect(url_for("view_tally_bridge_run", run_id=run.id))
+
+    @app.get("/tally-bridge/runs/<run_id>/download")
+    def download_tally_bridge_payload(run_id: str):
+        run = get_tally_bridge_run(run_id)
+        if run is None:
+            abort(404)
+        path = Path(run.payload_storage_path)
+        if not path.exists():
+            abort(404)
+        return send_file(path, as_attachment=True, download_name=run.payload_filename, mimetype=run.payload_content_type)
 
     @app.get("/bp-rules")
     def brand_partner_rules_home() -> str:

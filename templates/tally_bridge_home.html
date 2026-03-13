@@ -36,6 +36,16 @@
       <strong>{{ summary.artifact_count }}</strong>
       <small>XML, exports, screenshots, notes</small>
     </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Outbound packages</span>
+      <strong>{{ summary.outbound_run_count }}</strong>
+      <small>prepared Tally handoff runs</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Outbound open</span>
+      <strong>{{ summary.outbound_open_count }}</strong>
+      <small>still waiting on send or confirmation</small>
+    </article>
   </section>
 
   <section class="content-split content-split-hero">
@@ -214,6 +224,43 @@
         </article>
       </div>
     </article>
+  </section>
+
+  <section class="glass-card">
+    <div class="module-head compact">
+      <div>
+        <p class="eyebrow">Outbound queue</p>
+        <h2>Prepared Sales Order handoffs</h2>
+      </div>
+    </div>
+    {% if summary.recent_outbound_runs %}
+      <div class="warning-stack">
+        {% for run in summary.recent_outbound_runs %}
+          <article class="warning-row warning-row-rich tally-run-card">
+            <div class="tally-run-card-main">
+              <div>
+                <strong>{{ run.payload_filename }}</strong>
+                <p class="empty-state">Source run: {{ run.sales_order_run.original_filename if run.sales_order_run else run.sales_order_run_id }}</p>
+              </div>
+              <div class="chip-row">
+                <span class="database-toolbar-pill">{{ run.status.replace('_', ' ') }}</span>
+                <span class="database-toolbar-pill">{{ run.bridge_mode.replace('_', ' ').title() }}</span>
+                <span class="database-toolbar-pill">{{ run.rows_ready }} rows</span>
+              </div>
+            </div>
+            <div class="actions">
+              <a class="secondary-button" href="{{ url_for('view_tally_bridge_run', run_id=run.id) }}">Open outbound run</a>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="delivery-run-empty">
+        <span class="mini-chip">No outbound packages yet</span>
+        <h3>Prepare the first handoff from a clean Sales Order run.</h3>
+        <p class="empty-state">Once you send a ready Sales Order run into Tally Bridge, the outbound queue will live here.</p>
+      </div>
+    {% endif %}
   </section>
 
   <section class="glass-card">

@@ -22,6 +22,10 @@
         <a class="primary-button" href="{{ url_for('review_sales_order_run', run_id=summary.run.id) }}">Review unresolved SKUs</a>
       {% else %}
         <a class="primary-button" href="{{ url_for('download_sales_order_run', run_id=summary.run.id) }}">Download Sales Order</a>
+        <form action="{{ url_for('create_tally_bridge_outbound_run') }}" method="post">
+          <input type="hidden" name="sales_order_run_id" value="{{ summary.run.id }}">
+          <button class="secondary-button" type="submit">Send to Tally Bridge</button>
+        </form>
       {% endif %}
       <a class="secondary-button" href="{{ url_for('sales_order_home') }}">Back to Sales Order</a>
     </div>

@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block title %}Tally Outbound {{ detail.run.id }} | DALA OPERATIONS{% endblock %}
+
+{% block content %}
+  <section class="hero-band">
+    <div>
+      <p class="eyebrow">Tally Bridge · Outbound</p>
+      <h1>{{ detail.run.payload_filename }}</h1>
+      <p class="page-copy">This is the controlled handoff package from Sales Order into Tally. Keep the payload, stage it if the profile supports file-drop, then record exactly when Tally received or confirmed it.</p>
+    </div>
+    <div class="actions">
+      <span class="hero-chip">{{ detail.run.status.replace('_', ' ') }}</span>
+      <a class="secondary-button" href="{{ url_for('tally_bridge_home') }}">Back to Tally Bridge</a>
+    </div>
+  </section>
+
+  <section class="content-split content-split-hero">
+    <article class="glass-card module-hero module-hero-primary">
+      <div>
+        <p class="eyebrow">Bridge mode</p>
+        <h2>{{ detail.recommended_mode_label }}</h2>
+        <p class="module-copy">The handoff package is already built from the approved Sales Order run. What happens next depends on your active bridge mode and what your Tally workstation can actually receive.</p>
+      </div>
+      <div class="module-meta-grid">
+        <div class="meter">
+          <span class="metric-label">Source Sales Order</span>
+          <strong>{{ detail.run.sales_order_run.original_filename if detail.run.sales_order_run else detail.run.sales_order_run_id }}</strong>
+        </div>
+        <div class="meter">
+          <span class="metric-label">Rows ready</span>
+          <strong>{{ detail.run.rows_ready }}</strong>
+        </div>
+        <div class="meter">
+          <span class="metric-label">Payload stored</span>
+          <strong>{{ 'Yes' if detail.payload_exists else 'Missing' }}</strong>
+        </div>
+        <div class="meter">
+          <span class="metric-label">Staged to target</span>
+          <strong>{{ 'Yes' if detail.staged_exists else 'Not yet' }}</strong>
+        </div>
+      </div>
+      <div class="chip-row">
+        <span class="database-toolbar-pill is-active">{{ detail.run.status.replace('_', ' ') }}</span>
+        {% if detail.run.profile %}
+          <span class="database-toolbar-pill">{{ detail.run.profile.name }}</span>
+          <span class="database-toolbar-pill">{{ detail.run.profile.connection_mode.replace('_', ' ').title() }}</span>
+        {% endif %}
+      </div>
+      {% if detail.run.notes %}
+        <p class="subtle-note">{{ detail.run.notes }}</p>
+      {% endif %}
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Actions</p>
+          <h2>Move this package forward</h2>
+        </div>
+      </div>
+      <div class="actions">
+        <a class="primary-button" href="{{ url_for('download_tally_bridge_payload', run_id=detail.run.id) }}">Download payload</a>
+        {% if detail.run.profile and detail.run.profile.connection_mode in ['file_drop', 'hybrid'] %}
+          <form action="{{ url_for('stage_tally_bridge_run_view', run_id=detail.run.id) }}" method="post">
+            <button class="secondary-button" type="submit">Stage to profile target</button>
+          </form>
+        {% endif %}
+        {% if detail.run.sales_order_run %}
+          <a class="secondary-button" href="{{ url_for('view_sales_order_run', run_id=detail.run.sales_order_run.id) }}">Back to Sales Order run</a>
+        {% endif %}
+      </div>
+      <div class="delivery-run-empty">
+        <span class="mini-chip">Source package</span>
+        <p class="empty-state">If your Tally setup is still manual today, download this payload and upload it exactly once from the Tally workstation. If the profile uses a watched folder, staging can drop the same payload into that target path.</p>
+      </div>
+    </article>
+  </section>
+
+  <section class="content-split">
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Status control</p>
+          <h2>Record what happened in Tally</h2>
+        </div>
+      </div>
+      <form class="form-stack" action="{{ url_for('update_tally_bridge_run_view', run_id=detail.run.id) }}" method="post">
+        <label class="field">
+          <span class="field-label">Outbound status</span>
+          <select name="status">
+            {% for code, label in bridge_run_status_options %}
+              <option value="{{ code }}" {% if detail.run.status == code %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">Notes</span>
+          <textarea class="planner-textarea" name="notes" rows="4" placeholder="What happened when you sent this package into Tally?">{{ detail.run.notes or '' }}</textarea>
+        </label>
+        <label class="field">
+          <span class="field-label">Error or attention note</span>
+          <textarea class="planner-textarea" name="error_message" rows="3" placeholder="Only needed if the run failed or needs attention">{{ detail.run.error_message or '' }}</textarea>
+        </label>
+        <div class="actions">
+          <button class="primary-button" type="submit">Save outbound status</button>
+        </div>
+      </form>
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Paths</p>
+          <h2>Stored handoff files</h2>
+        </div>
+      </div>
+      <div class="warning-stack">
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>Payload path</strong>
+            <small>{{ detail.run.payload_storage_path }}</small>
+          </div>
+        </article>
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>Staged target</strong>
+            <small>{{ detail.run.staged_storage_path or 'Not staged yet' }}</small>
+          </div>
+        </article>
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>Confirmed in Tally</strong>
+            <small>{{ detail.run.confirmed_at.strftime('%Y-%m-%d %H:%M') if detail.run.confirmed_at else 'Not confirmed yet' }}</small>
+          </div>
+        </article>
+      </div>
+    </article>
+  </section>
+{% endblock %}
