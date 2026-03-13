@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -2577,6 +2578,83 @@ def test_sales_order_run_generates_tally_ready_workbook() -> None:
             assert run.rows_ready == 2
             assert run.rows_needing_review == 0
             assert [line.invoice_category for line in lines] == ["VT", "NV"]
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_sales_order_run_uses_pepup_order_date_as_invoice_date() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        response = client.post(
+            "/uom/import",
+            data={
+                "uom_workbook": (
+                    BytesIO(
+                        build_uom_workbook_from_rows(
+                            [
+                                ["SKU Alpha", "ctn", "pcs", 12, "Yes", 100],
+                                ["SKU Vanilla", "ctn", "pcs", 12, "No", 120],
+                            ]
+                        ).getvalue()
+                    ),
+                    "uom.xlsx",
+                )
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Order Item List"
+        sheet.append(
+            [
+                "Date of Order",
+                "Time of Order",
+                "Order Number",
+                "Retailer Name",
+                "Item Name",
+                "UOM",
+                "Quantity",
+                "Price",
+                "Total",
+            ]
+        )
+        sheet.append(["2026-03-13 00:00:00", "10:39:00", "17598554", "Twins Faja Supermarket EGBEDA", "SKU Alpha", "cases", 1, 100, 100])
+        sheet.append(["2026-03-13 00:00:00", "10:39:00", "17598555", "Twins Faja Supermarket EGBEDA", "SKU Vanilla", "pcs", 6, 10, 60])
+        stream = BytesIO()
+        workbook.save(stream)
+        stream.seek(0)
+
+        upload = client.post(
+            "/sales-order/import",
+            data={"sales_order_workbook": (BytesIO(stream.getvalue()), "pepup.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert upload.status_code == 302
+        assert "/review" not in upload.headers["Location"]
+        run_id = upload.headers["Location"].split("/sales-order/runs/")[1]
+
+        download = client.get(f"/sales-order/runs/{run_id}/download")
+        assert download.status_code == 200
+
+        exported = load_workbook(BytesIO(download.data), data_only=True)["Sales Order"]
+        assert exported["A2"].value == datetime(2026, 3, 13, 0, 0)
+        assert exported["A3"].value == datetime(2026, 3, 13, 0, 0)
+
+        with app.app_context():
+            lines = db.session.query(SalesOrderLine).filter_by(run_id=run_id).order_by(SalesOrderLine.id.asc()).all()
+            assert [line.invoice_date for line in lines] == ["2026-03-13", "2026-03-13"]
+            assert {line.invoice_category for line in lines} == {"VT", "NV"}
             db.session.remove()
             db.engine.dispose()
 
