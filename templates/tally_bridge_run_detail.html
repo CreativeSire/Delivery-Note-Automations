@@ -36,6 +36,105 @@
       <strong>{{ detail.run.uploaded_case_status.replace('_', ' ') }}</strong>
       <small>uploaded comparison sample status</small>
     </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Manual chain</span>
+      <strong>{{ detail.link_integrity.manual_case.status.replace('_', ' ') }}</strong>
+      <small>SO -> DN -> SI verdict</small>
+    </article>
+    <article class="glass-card stat-card">
+      <span class="panel-label">Import chain</span>
+      <strong>{{ detail.link_integrity.upload_case.status.replace('_', ' ') }}</strong>
+      <small>uploaded path verdict</small>
+    </article>
+  </section>
+
+  <section class="content-split">
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Link integrity</p>
+          <h2>Manual linked case</h2>
+        </div>
+        <span class="database-toolbar-pill {% if detail.link_integrity.manual_case.status == 'linked' %}is-active{% endif %}">{{ detail.link_integrity.manual_case.status.replace('_', ' ') }}</span>
+      </div>
+      <div class="chip-row">
+        <span class="database-toolbar-pill">SO {{ detail.link_integrity.manual_case.sales_order_count }}</span>
+        <span class="database-toolbar-pill">DN {{ detail.link_integrity.manual_case.delivery_note_count }}</span>
+        <span class="database-toolbar-pill">SI {{ detail.link_integrity.manual_case.sales_invoice_count }}</span>
+        <span class="database-toolbar-pill">Analyzable {{ detail.link_integrity.manual_case.analyzable_count }}</span>
+      </div>
+      <p class="empty-state">{{ detail.link_integrity.manual_case.verdict }}</p>
+      <div class="warning-stack">
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>SO -> DN overlap</strong>
+            <small>{{ detail.link_integrity.manual_case.shared_so_to_dn|join(', ') if detail.link_integrity.manual_case.shared_so_to_dn else 'No common references found yet' }}</small>
+          </div>
+        </article>
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>DN -> SI overlap</strong>
+            <small>{{ detail.link_integrity.manual_case.shared_dn_to_si|join(', ') if detail.link_integrity.manual_case.shared_dn_to_si else 'No common references found yet' }}</small>
+          </div>
+        </article>
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>All three</strong>
+            <small>{{ detail.link_integrity.manual_case.shared_all_three|join(', ') if detail.link_integrity.manual_case.shared_all_three else 'No single chain proven across SO, DN, and SI yet' }}</small>
+          </div>
+        </article>
+      </div>
+    </article>
+
+    <article class="glass-card">
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Link integrity</p>
+          <h2>Uploaded comparison case</h2>
+        </div>
+        <span class="database-toolbar-pill {% if detail.link_integrity.upload_case.status == 'linked' %}is-active{% endif %}">{{ detail.link_integrity.upload_case.status.replace('_', ' ') }}</span>
+      </div>
+      <div class="chip-row">
+        <span class="database-toolbar-pill">SO {{ detail.link_integrity.upload_case.sales_order_count }}</span>
+        <span class="database-toolbar-pill">DN {{ detail.link_integrity.upload_case.delivery_note_count }}</span>
+        <span class="database-toolbar-pill">SI {{ detail.link_integrity.upload_case.sales_invoice_count }}</span>
+        <span class="database-toolbar-pill">Analyzable {{ detail.link_integrity.upload_case.analyzable_count }}</span>
+      </div>
+      <p class="empty-state">{{ detail.link_integrity.upload_case.verdict }}</p>
+      <div class="warning-stack">
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>SO -> DN overlap</strong>
+            <small>{{ detail.link_integrity.upload_case.shared_so_to_dn|join(', ') if detail.link_integrity.upload_case.shared_so_to_dn else 'No common references found yet' }}</small>
+          </div>
+        </article>
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>DN -> SI overlap</strong>
+            <small>{{ detail.link_integrity.upload_case.shared_dn_to_si|join(', ') if detail.link_integrity.upload_case.shared_dn_to_si else 'No common references found yet' }}</small>
+          </div>
+        </article>
+        <article class="warning-row warning-row-rich">
+          <div>
+            <strong>All three</strong>
+            <small>{{ detail.link_integrity.upload_case.shared_all_three|join(', ') if detail.link_integrity.upload_case.shared_all_three else 'No single chain proven across SO, DN, and SI yet' }}</small>
+          </div>
+        </article>
+      </div>
+    </article>
+  </section>
+
+  <section class="glass-card">
+    <div class="module-head compact">
+      <div>
+        <p class="eyebrow">Bridge verdict</p>
+        <h2>What the current evidence says</h2>
+      </div>
+    </div>
+    <div class="delivery-run-empty">
+      <span class="mini-chip">Chain comparison</span>
+      <p class="empty-state">{{ detail.link_integrity.comparison_verdict }}</p>
+    </div>
   </section>
 
   <section class="content-split content-split-hero">

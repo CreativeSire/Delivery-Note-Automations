@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from shutil import copy2
 from io import BytesIO
 from pathlib import Path
@@ -10,10 +11,16 @@ from flask import current_app
 from sqlalchemy import func, select
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
+from openpyxl import load_workbook
 
 from models import SalesOrderRun, TallyBridgeProfile, TallyBridgeRun, TallyDiagnosticsArtifact, TallyDiagnosticsRun, db, utcnow
 from services import ServiceError, _string_value
 from workflow_services import WorkflowError, create_sku_automator_run, export_sales_order_run_to_workbook
+
+try:
+    import xlrd  # type: ignore
+except Exception:  # pragma: no cover
+    xlrd = None
 
 CONNECTION_MODE_OPTIONS = [
     ("manual_fallback", "Manual fallback"),
@@ -75,6 +82,9 @@ ARTIFACT_TYPE_OPTIONS = [
     ("other", "Other"),
 ]
 
+REFERENCE_PREFIX_PATTERN = re.compile(r"\b(?:BP|VT|NV)-(\d{6,})\b", re.IGNORECASE)
+REFERENCE_RAW_PATTERN = re.compile(r"\b\d{6,}\b")
+
 
 @dataclass
 class TallyBridgeSummary:
@@ -103,6 +113,31 @@ class TallyDiagnosticsDetail:
     artifact_groups: list[TallyDiagnosticsArtifactGroup]
     artifact_count: int
     recommended_mode_label: str
+    link_integrity: "TallyLinkIntegritySummary"
+
+
+@dataclass
+class TallyLinkIntegrityCase:
+    code: str
+    label: str
+    artifact_count: int
+    sales_order_count: int
+    delivery_note_count: int
+    sales_invoice_count: int
+    analyzable_count: int
+    shared_all_three: list[str]
+    shared_so_to_dn: list[str]
+    shared_dn_to_si: list[str]
+    shared_so_to_si: list[str]
+    verdict: str
+    status: str
+
+
+@dataclass
+class TallyLinkIntegritySummary:
+    manual_case: TallyLinkIntegrityCase
+    upload_case: TallyLinkIntegrityCase
+    comparison_verdict: str
 
 
 @dataclass
@@ -170,11 +205,13 @@ def build_tally_diagnostics_detail(run_id: str) -> TallyDiagnosticsDetail | None
         groups.append(TallyDiagnosticsArtifactGroup(code="unclassified", label="Unclassified", artifacts=other_artifacts))
 
     recommended_mode = derive_tally_bridge_mode(run)
+    link_integrity = build_tally_link_integrity_summary(artifacts)
     return TallyDiagnosticsDetail(
         run=run,
         artifact_groups=groups,
         artifact_count=len(artifacts),
         recommended_mode_label=_mode_label(recommended_mode),
+        link_integrity=link_integrity,
     )
 
 
@@ -485,6 +522,32 @@ def import_tally_register_for_bridge_run(run_id: str, *, file_storage: object) -
     return run
 
 
+def build_tally_link_integrity_summary(artifacts: list[TallyDiagnosticsArtifact]) -> TallyLinkIntegritySummary:
+    by_group = {
+        "manual_linked": [artifact for artifact in artifacts if artifact.artifact_group == "manual_linked"],
+        "uploaded_unlinked": [artifact for artifact in artifacts if artifact.artifact_group == "uploaded_unlinked"],
+    }
+    manual_case = _analyze_link_integrity_case("manual_linked", "Manual linked case", by_group["manual_linked"])
+    upload_case = _analyze_link_integrity_case("uploaded_unlinked", "Uploaded comparison case", by_group["uploaded_unlinked"])
+
+    if manual_case.status == "linked" and upload_case.status == "broken":
+        comparison_verdict = "The manual case appears linked, but the uploaded case breaks the reference chain after import."
+    elif manual_case.status == "linked" and upload_case.status == "linked":
+        comparison_verdict = "Both the manual and uploaded cases appear to preserve the same order reference chain."
+    elif manual_case.status == "missing":
+        comparison_verdict = "Upload one full manual SO -> DN -> SI sample first so the bridge can compare it against the imported path."
+    elif upload_case.status == "missing":
+        comparison_verdict = "Upload the imported comparison case so the bridge can prove whether Tally keeps the same chain."
+    else:
+        comparison_verdict = "The bridge has partial evidence, but the chain verdict is still incomplete. Add or improve the voucher artifacts."
+
+    return TallyLinkIntegritySummary(
+        manual_case=manual_case,
+        upload_case=upload_case,
+        comparison_verdict=comparison_verdict,
+    )
+
+
 def derive_tally_bridge_mode(run: TallyDiagnosticsRun) -> str:
     if (
         run.xml_http_supported == "yes"
@@ -534,3 +597,137 @@ def _bridge_storage_dir(*parts: str) -> Path:
         target_dir = target_dir / part
     target_dir.mkdir(parents=True, exist_ok=True)
     return target_dir
+
+
+def _analyze_link_integrity_case(code: str, label: str, artifacts: list[TallyDiagnosticsArtifact]) -> TallyLinkIntegrityCase:
+    role_refs: dict[str, set[str]] = {
+        "sales_order": set(),
+        "delivery_note": set(),
+        "sales_invoice": set(),
+    }
+    analyzable_count = 0
+    role_counts = {role: 0 for role in role_refs}
+
+    for artifact in artifacts:
+        if artifact.artifact_type not in role_refs:
+            continue
+        role_counts[artifact.artifact_type] += 1
+        refs = _extract_references_from_artifact(artifact)
+        if refs:
+            analyzable_count += 1
+            role_refs[artifact.artifact_type].update(refs)
+
+    so_refs = role_refs["sales_order"]
+    dn_refs = role_refs["delivery_note"]
+    si_refs = role_refs["sales_invoice"]
+    shared_so_to_dn = sorted(so_refs & dn_refs)
+    shared_dn_to_si = sorted(dn_refs & si_refs)
+    shared_so_to_si = sorted(so_refs & si_refs)
+    shared_all_three = sorted(so_refs & dn_refs & si_refs)
+
+    missing_roles = [
+        role.replace("_", " ")
+        for role, count in role_counts.items()
+        if count == 0
+    ]
+    if not artifacts:
+        status = "missing"
+        verdict = "No voucher evidence has been uploaded for this case yet."
+    elif missing_roles:
+        status = "incomplete"
+        verdict = f"Need {', '.join(missing_roles)} artifact(s) to compare the full SO -> DN -> SI chain."
+    elif analyzable_count == 0:
+        status = "incomplete"
+        verdict = "Voucher artifacts are present, but the bridge could not read any comparable references from them yet."
+    elif shared_all_three:
+        status = "linked"
+        verdict = "Common references appear in the Sales Order, Delivery Note, and Sales Invoice artifacts, so the chain looks preserved."
+    elif not shared_so_to_dn:
+        status = "broken"
+        verdict = "The Delivery Note does not share a comparable reference with the Sales Order in the uploaded evidence."
+    elif not shared_dn_to_si:
+        status = "broken"
+        verdict = "The Sales Invoice does not share a comparable reference with the Delivery Note in the uploaded evidence."
+    else:
+        status = "partial"
+        verdict = "Some references overlap, but the bridge cannot prove one full SO -> DN -> SI chain from the current evidence."
+
+    return TallyLinkIntegrityCase(
+        code=code,
+        label=label,
+        artifact_count=len(artifacts),
+        sales_order_count=role_counts["sales_order"],
+        delivery_note_count=role_counts["delivery_note"],
+        sales_invoice_count=role_counts["sales_invoice"],
+        analyzable_count=analyzable_count,
+        shared_all_three=shared_all_three[:8],
+        shared_so_to_dn=shared_so_to_dn[:8],
+        shared_dn_to_si=shared_dn_to_si[:8],
+        shared_so_to_si=shared_so_to_si[:8],
+        verdict=verdict,
+        status=status,
+    )
+
+
+def _extract_references_from_artifact(artifact: TallyDiagnosticsArtifact) -> set[str]:
+    path = Path(artifact.storage_path)
+    if not path.exists():
+        return set()
+    text = _extract_text_payload(path, artifact.filename)
+    if not text:
+        return set()
+
+    references = {match.group(1) for match in REFERENCE_PREFIX_PATTERN.finditer(text)}
+    references.update(match.group(0) for match in REFERENCE_RAW_PATTERN.finditer(text))
+    return {value for value in references if value and "/" not in value}
+
+
+def _extract_text_payload(path: Path, filename: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    if suffix in {".txt", ".csv", ".tsv", ".xml"}:
+        return _decode_text_payload(path.read_bytes())
+    if suffix in {".xlsx", ".xlsm"}:
+        return _read_openpyxl_text(path)
+    if suffix == ".xls" and xlrd is not None:
+        return _read_xlrd_text(path)
+    return ""
+
+
+def _decode_text_payload(payload: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-16", "cp1252", "latin-1"):
+        try:
+            return payload.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return ""
+
+
+def _read_openpyxl_text(path: Path) -> str:
+    try:
+        workbook = load_workbook(path, data_only=True, read_only=True)
+    except Exception:
+        return ""
+
+    chunks: list[str] = []
+    for sheet in workbook.worksheets:
+        for row in sheet.iter_rows(values_only=True):
+            line = " ".join(_string_value(cell) for cell in row if _string_value(cell))
+            if line:
+                chunks.append(line)
+    return "\n".join(chunks)
+
+
+def _read_xlrd_text(path: Path) -> str:
+    try:
+        workbook = xlrd.open_workbook(path.as_posix())
+    except Exception:
+        return ""
+
+    chunks: list[str] = []
+    for sheet_index in range(workbook.nsheets):
+        sheet = workbook.sheet_by_index(sheet_index)
+        for row_index in range(sheet.nrows):
+            values = [_string_value(value) for value in sheet.row_values(row_index) if _string_value(value)]
+            if values:
+                chunks.append(" ".join(values))
+    return "\n".join(chunks)

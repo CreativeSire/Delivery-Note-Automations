@@ -361,6 +361,84 @@ def test_tally_bridge_profile_and_diagnostics_flow() -> None:
             db.engine.dispose()
 
 
+def test_tally_bridge_diagnostics_surfaces_link_integrity_verdicts() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        client.post(
+            "/tally-bridge/profile",
+            data={
+                "name": "Link Check Tally",
+                "connection_mode": "manual_fallback",
+            },
+            follow_redirects=False,
+        )
+
+        create_run = client.post(
+            "/tally-bridge/diagnostics",
+            data={"title": "Reference Chain Check"},
+            follow_redirects=False,
+        )
+        assert create_run.status_code == 302
+        run_id = create_run.headers["Location"].rstrip("/").split("/")[-1]
+
+        manual_payloads = [
+            ("sales_order", b"Sales Order ref VT-17570001"),
+            ("delivery_note", b"Delivery Note against 17570001"),
+            ("sales_invoice", b"Sales Invoice for VT-17570001"),
+        ]
+        for artifact_type, payload in manual_payloads:
+            upload = client.post(
+                f"/tally-bridge/diagnostics/{run_id}/artifacts",
+                data={
+                    "artifact_group": "manual_linked",
+                    "artifact_type": artifact_type,
+                    "description": f"Manual {artifact_type}",
+                    "artifact_file": (BytesIO(payload), f"manual-{artifact_type}.txt"),
+                },
+                content_type="multipart/form-data",
+                follow_redirects=False,
+            )
+            assert upload.status_code == 302
+
+        upload_payloads = [
+            ("sales_order", b"Imported SO ref VT-17570001"),
+            ("delivery_note", b"Imported DN ref VT-99999999"),
+            ("sales_invoice", b"Imported SI ref VT-99999999"),
+        ]
+        for artifact_type, payload in upload_payloads:
+            upload = client.post(
+                f"/tally-bridge/diagnostics/{run_id}/artifacts",
+                data={
+                    "artifact_group": "uploaded_unlinked",
+                    "artifact_type": artifact_type,
+                    "description": f"Imported {artifact_type}",
+                    "artifact_file": (BytesIO(payload), f"imported-{artifact_type}.txt"),
+                },
+                content_type="multipart/form-data",
+                follow_redirects=False,
+            )
+            assert upload.status_code == 302
+
+        detail = client.get(f"/tally-bridge/diagnostics/{run_id}")
+        assert detail.status_code == 200
+        html = detail.get_data(as_text=True)
+        assert "Common references appear in the Sales Order, Delivery Note, and Sales Invoice artifacts" in html
+        assert "The Delivery Note does not share a comparable reference with the Sales Order in the uploaded evidence." in html
+        assert "The manual case appears linked, but the uploaded case breaks the reference chain after import." in html
+
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
 def test_tally_bridge_outbound_run_can_prepare_and_stage_sales_order_payload() -> None:
     with TemporaryDirectory() as temp_dir:
         app = create_app(
