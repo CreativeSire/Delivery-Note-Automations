@@ -20,6 +20,7 @@ from services import (
     apply_invoice_classification_to_record,
     build_prefixed_reference,
     invoice_category_parts,
+    load_invoice_routing_entries,
     load_brand_partner_rules,
     normalize_sku,
     resolve_product_match,
@@ -157,6 +158,7 @@ def create_sales_order_run(file_storage: Any) -> SalesOrderRun:
     products = list(db.session.scalars(select(Product)))
     aliases = list(db.session.scalars(select(ProductAlias)))
     bp_rules = load_brand_partner_rules()
+    invoice_routing_entries = load_invoice_routing_entries()
 
     for row_index in range(2, sheet.max_row + 1):
         source_sku = _string_value(sheet.cell(row_index, header_map["source_sku"]).value)
@@ -201,7 +203,12 @@ def create_sales_order_run(file_storage: Any) -> SalesOrderRun:
             run.rows_needing_review += 1
         else:
             try:
-                _apply_product_to_sales_order_line(line, match, bp_rules=bp_rules)
+                _apply_product_to_sales_order_line(
+                    line,
+                    match,
+                    bp_rules=bp_rules,
+                    invoice_routing_entries=invoice_routing_entries,
+                )
                 run.rows_ready += 1
             except WorkflowError:
                 line.status = "needs_review"
@@ -239,6 +246,7 @@ def create_sku_automator_run(file_storage: Any) -> SkuAutomatorRun:
     products = list(db.session.scalars(select(Product)))
     aliases = list(db.session.scalars(select(ProductAlias)))
     bp_rules = load_brand_partner_rules()
+    invoice_routing_entries = load_invoice_routing_entries()
 
     current_header: dict[str, str] | None = None
     voucher_numbers: set[str] = set()
@@ -295,7 +303,12 @@ def create_sku_automator_run(file_storage: Any) -> SkuAutomatorRun:
             run.rows_needing_review += 1
         else:
             try:
-                _apply_product_to_sku_automator_line(line, match, bp_rules=bp_rules)
+                _apply_product_to_sku_automator_line(
+                    line,
+                    match,
+                    bp_rules=bp_rules,
+                    invoice_routing_entries=invoice_routing_entries,
+                )
                 run.rows_ready += 1
             except WorkflowError:
                 line.status = "needs_review"
@@ -374,6 +387,7 @@ def apply_sales_order_review_decisions(run_id: str, mapping: dict[str, int]) -> 
         raise WorkflowError("This sales-order run could not be found.")
 
     bp_rules = load_brand_partner_rules()
+    invoice_routing_entries = load_invoice_routing_entries()
     for source_sku, product_id in mapping.items():
         product = db.session.get(Product, product_id)
         if product is None:
@@ -387,7 +401,12 @@ def apply_sales_order_review_decisions(run_id: str, mapping: dict[str, int]) -> 
             )
         )
         for line in lines:
-            _apply_product_to_sales_order_line(line, ProductMatch(product, "approved-alias"), bp_rules=bp_rules)
+            _apply_product_to_sales_order_line(
+                line,
+                ProductMatch(product, "approved-alias"),
+                bp_rules=bp_rules,
+                invoice_routing_entries=invoice_routing_entries,
+            )
 
     _refresh_sales_order_run(run)
     db.session.commit()
@@ -400,6 +419,7 @@ def apply_sku_automator_review_decisions(run_id: str, mapping: dict[str, int]) -
         raise WorkflowError("This SKU Automator run could not be found.")
 
     bp_rules = load_brand_partner_rules()
+    invoice_routing_entries = load_invoice_routing_entries()
     for source_sku, product_id in mapping.items():
         product = db.session.get(Product, product_id)
         if product is None:
@@ -413,7 +433,12 @@ def apply_sku_automator_review_decisions(run_id: str, mapping: dict[str, int]) -
             )
         )
         for line in lines:
-            _apply_product_to_sku_automator_line(line, ProductMatch(product, "approved-alias"), bp_rules=bp_rules)
+            _apply_product_to_sku_automator_line(
+                line,
+                ProductMatch(product, "approved-alias"),
+                bp_rules=bp_rules,
+                invoice_routing_entries=invoice_routing_entries,
+            )
 
     _refresh_sku_automator_run(run)
     db.session.commit()
@@ -597,6 +622,7 @@ def _apply_product_to_sales_order_line(
     match: ProductMatch,
     *,
     bp_rules: list[Any] | None = None,
+    invoice_routing_entries: list[Any] | None = None,
 ) -> None:
     product = match.product
     _validate_sales_order_product(product)
@@ -622,6 +648,7 @@ def _apply_product_to_sales_order_line(
         sku_name=product.sku_name,
         raw_reference_no=line.raw_reference_no or line.order_number,
         bp_rules=bp_rules,
+        invoice_routing_entries=invoice_routing_entries,
     )
     line.prefixed_reference_no = classification.prefixed_reference_no
     line.raw_reference_no = classification.raw_reference_no or line.raw_reference_no
@@ -632,6 +659,7 @@ def _apply_product_to_sku_automator_line(
     match: ProductMatch,
     *,
     bp_rules: list[Any] | None = None,
+    invoice_routing_entries: list[Any] | None = None,
 ) -> None:
     product = match.product
     _validate_sku_automator_product(product)
@@ -650,6 +678,7 @@ def _apply_product_to_sku_automator_line(
         sku_name=product.sku_name,
         raw_reference_no=line.raw_reference_no or line.order_reference_no,
         bp_rules=bp_rules,
+        invoice_routing_entries=invoice_routing_entries,
     )
     line.prefixed_reference_no = classification.prefixed_reference_no
     line.raw_reference_no = classification.raw_reference_no or line.raw_reference_no

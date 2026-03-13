@@ -161,6 +161,70 @@
 
       <div class="panel-head compact">
         <div>
+          <p class="eyebrow">Invoice routing</p>
+          <h2>Brand Partner source database</h2>
+        </div>
+        <span class="mini-chip">
+          {% if invoice_routing_summary.latest_import %}
+            {{ invoice_routing_summary.latest_import.filename }}
+          {% else %}
+            No routing source yet
+          {% endif %}
+        </span>
+      </div>
+
+      <p class="page-copy database-form-copy">Import the store-plus-SKU invoice database here when Brand Partner ownership should come from a maintained routing sheet instead of a manual fallback rule. Anything in the Invoice column other than DALA will route the matching row into the BP path.</p>
+
+      <form class="form-stack" action="{{ url_for('upload_invoice_routing') }}" method="post" enctype="multipart/form-data">
+        <input type="hidden" name="return_to" value="product_master">
+        <label class="file-field">
+          <span class="field-label">Invoice routing workbook</span>
+          <input name="invoice_routing_workbook" type="file" accept=".xlsx,.xls,.csv,.tsv,.txt" required>
+        </label>
+        <div class="chip-row">
+          <span class="info-chip">Match store + SKU</span>
+          <span class="info-chip">Set invoice owner</span>
+          <span class="info-chip">Preserve route name</span>
+        </div>
+        <button class="primary-button" type="submit">Import routing database</button>
+      </form>
+
+      <div class="delivery-run-empty">
+        <span class="mini-chip">{{ invoice_routing_summary.entry_count }} live routes</span>
+        <p class="empty-state">
+          {% if invoice_routing_summary.latest_import %}
+            Latest routing source imported on {{ invoice_routing_summary.latest_import.created_at.strftime('%d %b %Y') }}.
+            Manual BP rules only step in when the imported routing database does not match a row.
+          {% else %}
+            No invoice-routing source has been imported yet. Until one exists, the system falls back to manual BP rules and product VAT.
+          {% endif %}
+        </p>
+      </div>
+
+      {% if invoice_routing_summary.preview_entries %}
+        <div class="data-table line-table database-rules-table">
+          <div class="table-line table-head-line table-line-rule admin-table-head">
+            <span>Party</span>
+            <span>SKU</span>
+            <span>Invoice</span>
+          </div>
+          {% for entry in invoice_routing_summary.preview_entries %}
+            <div class="table-line table-line-rule admin-table-row">
+              <span>
+                <strong>{{ entry.party_name }}</strong>
+                {% if entry.brand_name %}
+                  <small>{{ entry.brand_name }}</small>
+                {% endif %}
+              </span>
+              <span>{{ entry.sku_name }}</span>
+              <span>{{ entry.invoice_name }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      <div class="panel-head compact">
+        <div>
           <p class="eyebrow">{% if product_to_edit %}Edit{% else %}Add{% endif %}</p>
           <h2>{% if product_to_edit %}Update product{% else %}New product{% endif %}</h2>
         </div>
@@ -216,12 +280,12 @@
       <div class="panel-head compact">
         <div>
           <p class="eyebrow">Invoice rules</p>
-          <h2>Brand Partner overrides</h2>
+          <h2>Manual BP fallbacks</h2>
         </div>
         <a class="secondary-button" href="{{ url_for('brand_partner_rules_home') }}">Open rules workspace</a>
       </div>
 
-      <p class="page-copy database-form-copy">Use these rules when a SKU should route to Brand Partner ownership for a specific store or for every store. Matching rows get a <code>BP-</code> reference while VAT truth stays attached to the row.</p>
+      <p class="page-copy database-form-copy">Use these only when the imported invoice-routing database does not cover a needed case yet. Matching rows still get a <code>BP-</code> reference while VAT truth stays attached to the row.</p>
 
       <form class="form-stack" action="{{ url_for('create_brand_partner_rule') }}" method="post">
         <input type="hidden" name="q" value="{{ search_query }}">

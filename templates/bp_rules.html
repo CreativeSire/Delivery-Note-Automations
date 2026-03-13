@@ -6,8 +6,8 @@
   <section class="hero-band">
     <div>
       <p class="eyebrow">Database · Brand Partner rules</p>
-      <h1>Control which SKU and store combinations route to Brand Partner ownership.</h1>
-      <p class="page-copy">Keep BP ownership logic explicit here, test it before it reaches Sales Order or Delivery Note, and let the system tag matching rows with <code>BP-</code> while still preserving VAT truth internally.</p>
+      <h1>Control how invoice ownership routes into the BP path.</h1>
+      <p class="page-copy">The imported invoice-routing database is the primary source for BP ownership. Use this workspace to inspect that source, test live rows, and keep manual Brand Partner rules only as fallback exceptions.</p>
     </div>
     <div class="actions">
       <a class="secondary-button" href="{{ url_for('product_master') }}">Back to Database</a>
@@ -15,14 +15,72 @@
     </div>
   </section>
 
+  <section class="glass-card">
+    <div class="module-head compact">
+      <div>
+        <p class="eyebrow">Imported source</p>
+        <h2>Invoice-routing database</h2>
+      </div>
+      <span class="mini-chip">
+        {% if invoice_routing_summary.latest_import %}
+          {{ invoice_routing_summary.latest_import.filename }}
+        {% else %}
+          No source imported yet
+        {% endif %}
+      </span>
+    </div>
+
+    <p class="page-copy">
+      {% if invoice_routing_summary.latest_import %}
+        {{ invoice_routing_summary.entry_count }} live route rows are active. Matching happens on store plus SKU first, then manual BP rules can catch urgent exceptions that are not yet in the imported database.
+      {% else %}
+        No invoice-routing source is active yet. Import one from the Product Master page to let the system flag Brand Partner ownership from a maintained database instead of manual rules alone.
+      {% endif %}
+    </p>
+
+    <form class="form-stack" action="{{ url_for('upload_invoice_routing') }}" method="post" enctype="multipart/form-data">
+      <input type="hidden" name="return_to" value="bp_rules">
+      <label class="file-field">
+        <span class="field-label">Refresh invoice-routing database</span>
+        <input name="invoice_routing_workbook" type="file" accept=".xlsx,.xls,.csv,.tsv,.txt" required>
+      </label>
+      <div class="actions">
+        <button class="secondary-button" type="submit">Import routing source</button>
+      </div>
+    </form>
+
+    {% if invoice_routing_summary.preview_entries %}
+      <div class="data-table line-table database-rules-table">
+        <div class="table-line table-head-line table-line-rule admin-table-head">
+          <span>Party</span>
+          <span>SKU</span>
+          <span>Invoice</span>
+        </div>
+        {% for entry in invoice_routing_summary.preview_entries[:6] %}
+          <div class="table-line table-line-rule admin-table-row">
+            <span>
+              <strong>{{ entry.party_name }}</strong>
+              {% if entry.brand_name %}
+                <small>{{ entry.brand_name }}</small>
+              {% endif %}
+            </span>
+            <span>{{ entry.sku_name }}</span>
+            <span>{{ entry.invoice_name }}</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
+
   <section class="content-split">
     <article class="glass-card">
       <div class="module-head compact">
         <div>
-          <p class="eyebrow">Rule builder</p>
-          <h2>Add BP override</h2>
+          <p class="eyebrow">Fallback builder</p>
+          <h2>Add manual BP override</h2>
         </div>
       </div>
+      <p class="page-copy">Use this only when the imported invoice-routing database does not already cover the row you need.</p>
       <form class="form-stack" action="{{ url_for('create_brand_partner_rule') }}" method="post">
         <input type="hidden" name="return_to" value="bp_rules">
         <input type="hidden" name="q" value="{{ search_query }}">
@@ -64,7 +122,7 @@
           <input name="raw_reference_no" type="text" value="{{ preview.raw_reference_no if preview else '' }}" placeholder="17575653">
         </label>
         <label class="field">
-          <span class="field-label">Fallback product</span>
+          <span class="field-label">VAT fallback product</span>
           <select name="product_id">
             <option value="">No fallback product</option>
             {% for product in all_products %}
@@ -82,14 +140,17 @@
           <p class="subtle-note">
             Owner: {{ preview.invoice_owner or 'Pending' }}
             {% if preview.tax_bucket %} · Tax bucket: {{ preview.tax_bucket }}{% endif %}
+            {% if preview.invoice_route_name %} · Route: {{ preview.invoice_route_name }}{% endif %}
           </p>
           <p class="empty-state">
-            {% if preview.classification_source == 'bp_rule' %}
+            {% if preview.classification_source == 'invoice_routing_db' %}
+              Matched the imported invoice-routing database{% if preview.invoice_route_name %}: {{ preview.invoice_route_name }}{% endif %}.
+            {% elif preview.classification_source == 'bp_rule' %}
               Matched a Brand Partner rule{% if preview.bp_rule_reason %}: {{ preview.bp_rule_reason }}{% endif %}.
             {% elif preview.classification_source == 'product_vat' %}
-              No BP rule matched, so the fallback product VAT setting would keep this in the DALA {{ preview.tax_bucket }} bucket.
+              No invoice-routing match or manual BP rule matched, so the fallback product VAT setting would keep this in the DALA {{ preview.tax_bucket }} bucket.
             {% else %}
-              No BP rule matched yet. Add a rule if this line should be owned by Brand Partner.
+              No invoice-routing match or manual BP rule matched yet. Import the routing database or add a fallback rule if this line should be owned by Brand Partner.
             {% endif %}
           </p>
         </div>
@@ -98,12 +159,12 @@
   </section>
 
   <section class="glass-card">
-    <div class="module-head compact">
-      <div>
-        <p class="eyebrow">Active rules</p>
-        <h2>Brand Partner routing table</h2>
+      <div class="module-head compact">
+        <div>
+          <p class="eyebrow">Fallback rules</p>
+          <h2>Manual Brand Partner overrides</h2>
+        </div>
       </div>
-    </div>
 
     <form class="database-search-form" action="{{ url_for('brand_partner_rules_home') }}" method="get">
       <label class="database-search-field" for="bp-rule-search">

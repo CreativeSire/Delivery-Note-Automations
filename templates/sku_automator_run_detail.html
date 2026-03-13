@@ -90,7 +90,12 @@
               <span>{{ line.resolved_sku_name }}</span>
               <span><span class="invoice-pill invoice-pill-{{ (line.invoice_category or 'pending')|lower }}">{{ line.invoice_category or 'Pending' }}</span></span>
               <span>{{ line.resolved_quantity }}</span>
-              <span class="invoice-reference">{{ line.prefixed_reference_no or line.order_reference_no }}</span>
+              <span class="invoice-meta">
+                <span class="invoice-reference">{{ line.prefixed_reference_no or line.order_reference_no }}</span>
+                {% if line.invoice_route_name %}
+                  <small class="invoice-route-note">{{ line.invoice_route_name }}</small>
+                {% endif %}
+              </span>
             </div>
           {% endfor %}
         </div>

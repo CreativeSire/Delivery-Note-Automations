@@ -19,7 +19,18 @@ from openpyxl import load_workbook
 from sqlalchemy import func, select, true
 
 from audit_services import record_audit_event
-from models import BrandPartnerRule, Product, ProductAlias, UploadLine, UploadRun, UomImport, UomImportReview, db
+from models import (
+    BrandPartnerRule,
+    InvoiceRoutingEntry,
+    InvoiceRoutingImport,
+    Product,
+    ProductAlias,
+    UploadLine,
+    UploadRun,
+    UomImport,
+    UomImportReview,
+    db,
+)
 
 TRACKER_SHEET = "tracker"
 UOM_SHEET = "UOM"
@@ -28,6 +39,12 @@ DATE_FORMAT = "%Y-%m-%d"
 TRACKER_ORDER_HEADERS = {"sales order number", "order number"}
 TRACKER_STORE_HEADERS = {"stores", "store", "supermarket", "supermarket name"}
 TRACKER_MIN_COLUMNS = 8
+INVOICE_ROUTING_HEADERS = {
+    "brand_name": {"brand name", "brand"},
+    "sku_name": {"stock item name", "brand sku", "item name", "sku", "product"},
+    "party_name": {"party name", "retailer", "retailer name", "customer", "party"},
+    "invoice_name": {"invoice", "invoice type", "required invoice", "invoice owner"},
+}
 OUTPUT_HEADERS = [
     "Invoice Date",
     "Order Number",
@@ -79,8 +96,10 @@ class DashboardSummary:
     inactive_product_count: int
     alias_count: int
     import_count: int
+    invoice_routing_import_count: int
     run_count: int
     latest_import: UomImport | None
+    latest_invoice_routing_import: InvoiceRoutingImport | None
     recent_imports: list[UomImport]
     recent_runs: list[UploadRun]
 
@@ -96,6 +115,7 @@ class InvoiceClassification:
     raw_reference_no: str
     invoice_owner: str | None
     tax_bucket: str | None
+    invoice_route_name: str | None
     invoice_category: str | None
     prefixed_reference_no: str | None
     classification_source: str | None
@@ -144,17 +164,46 @@ class UomImportOutcome:
     review: UomImportReview | None
 
 
+@dataclass
+class InvoiceRoutingSummary:
+    latest_import: InvoiceRoutingImport | None
+    entry_count: int
+    preview_entries: list[InvoiceRoutingEntry]
+
+
 def build_dashboard_summary() -> DashboardSummary:
     latest_import = db.session.scalar(select(UomImport).order_by(UomImport.created_at.desc()).limit(1))
+    latest_invoice_routing_import = db.session.scalar(
+        select(InvoiceRoutingImport).order_by(InvoiceRoutingImport.created_at.desc()).limit(1)
+    )
     return DashboardSummary(
         product_count=db.session.scalar(select(func.count(Product.id)).where(Product.is_active.is_(True))) or 0,
         inactive_product_count=db.session.scalar(select(func.count(Product.id)).where(Product.is_active.is_(False))) or 0,
         alias_count=db.session.scalar(select(func.count(ProductAlias.id))) or 0,
         import_count=db.session.scalar(select(func.count(UomImport.id))) or 0,
+        invoice_routing_import_count=db.session.scalar(select(func.count(InvoiceRoutingImport.id))) or 0,
         run_count=db.session.scalar(select(func.count(UploadRun.id))) or 0,
         latest_import=latest_import,
+        latest_invoice_routing_import=latest_invoice_routing_import,
         recent_imports=list(db.session.scalars(select(UomImport).order_by(UomImport.created_at.desc()).limit(5))),
         recent_runs=list(db.session.scalars(select(UploadRun).order_by(UploadRun.created_at.desc()).limit(8))),
+    )
+
+
+def build_invoice_routing_summary(*, limit: int = 8) -> InvoiceRoutingSummary:
+    latest_import = db.session.scalar(select(InvoiceRoutingImport).order_by(InvoiceRoutingImport.created_at.desc()).limit(1))
+    preview_entries = list(
+        db.session.scalars(
+            select(InvoiceRoutingEntry)
+            .order_by(InvoiceRoutingEntry.party_name.asc(), InvoiceRoutingEntry.sku_name.asc(), InvoiceRoutingEntry.id.asc())
+            .limit(limit)
+        )
+    )
+    entry_count = db.session.scalar(select(func.count(InvoiceRoutingEntry.id))) or 0
+    return InvoiceRoutingSummary(
+        latest_import=latest_import,
+        entry_count=entry_count,
+        preview_entries=preview_entries,
     )
 
 
@@ -164,6 +213,14 @@ def list_brand_partner_rules() -> list[BrandPartnerRule]:
             select(BrandPartnerRule)
             .where(BrandPartnerRule.is_active.is_(True))
             .order_by(BrandPartnerRule.sku_name_pattern.asc(), BrandPartnerRule.store_name_pattern.asc())
+        )
+    )
+
+
+def load_invoice_routing_entries() -> list[InvoiceRoutingEntry]:
+    return list(
+        db.session.scalars(
+            select(InvoiceRoutingEntry).order_by(InvoiceRoutingEntry.party_name.asc(), InvoiceRoutingEntry.sku_name.asc())
         )
     )
 
@@ -189,6 +246,7 @@ def preview_brand_partner_classification(
         "raw_reference_no": raw_reference_no or "",
         "invoice_owner": classification.invoice_owner or "",
         "tax_bucket": classification.tax_bucket or "",
+        "invoice_route_name": classification.invoice_route_name or "",
         "product": product,
         "invoice_category": classification.invoice_category or "",
         "prefixed_reference_no": classification.prefixed_reference_no or "",
@@ -239,6 +297,66 @@ def set_brand_partner_rule_active(rule_id: int, is_active: bool) -> BrandPartner
     rule.is_active = is_active
     db.session.commit()
     return rule
+
+
+def import_invoice_routing_workbook(file_storage: Any) -> InvoiceRoutingImport:
+    payload = _read_upload_payload(file_storage)
+    filename = file_storage.filename or "invoice-routing.xlsx"
+
+    workbook = _try_load_workbook(payload)
+    if workbook is not None:
+        rows = _extract_invoice_routing_rows_from_workbook(workbook)
+    else:
+        rows = _extract_invoice_routing_rows_from_delimited_payload(payload)
+
+    if not rows:
+        raise WorkbookShapeError(
+            "The uploaded file must contain Brand Name, Stock item Name, Party Name, and Invoice columns."
+        )
+
+    return import_invoice_routing_rows(rows, filename)
+
+
+def import_invoice_routing_rows(rows: list[dict[str, str]], filename: str) -> InvoiceRoutingImport:
+    import_log = InvoiceRoutingImport(filename=filename, row_count=0)
+    db.session.add(import_log)
+    db.session.flush()
+
+    db.session.query(InvoiceRoutingEntry).delete()
+
+    seen_keys: set[tuple[str, str, str]] = set()
+    for row in rows:
+        sku_name = _string_value(row.get("sku_name"))
+        party_name = _string_value(row.get("party_name"))
+        invoice_name = _string_value(row.get("invoice_name"))
+        if not sku_name or not party_name or not invoice_name:
+            continue
+
+        normalized_sku_name = normalize_sku(sku_name)
+        normalized_party_name = normalize_sku(party_name)
+        normalized_invoice_name = normalize_sku(invoice_name)
+        key = (normalized_sku_name, normalized_party_name, normalized_invoice_name)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+
+        db.session.add(
+            InvoiceRoutingEntry(
+                import_id=import_log.id,
+                brand_name=_string_value(row.get("brand_name")) or None,
+                normalized_brand_name=normalize_sku(_string_value(row.get("brand_name"))) or None,
+                sku_name=sku_name,
+                normalized_sku_name=normalized_sku_name,
+                party_name=party_name,
+                normalized_party_name=normalized_party_name,
+                invoice_name=invoice_name,
+                normalized_invoice_name=normalized_invoice_name,
+            )
+        )
+        import_log.row_count += 1
+
+    db.session.commit()
+    return import_log
 
 
 def import_uom_workbook(file_storage: Any) -> UomImportOutcome:
@@ -659,6 +777,7 @@ def create_tracker_run(file_storage: Any, timezone_name: str) -> UploadRun:
     products = list(db.session.scalars(select(Product)))
     aliases = list(db.session.scalars(select(ProductAlias)))
     bp_rules = load_brand_partner_rules()
+    invoice_routing_entries = load_invoice_routing_entries()
 
     for row_index in range(2, sheet.max_row + 1):
         order_number = _string_value(sheet.cell(row_index, 1).value)
@@ -702,7 +821,13 @@ def create_tracker_run(file_storage: Any, timezone_name: str) -> UploadRun:
                 line.status = "needs_review"
                 run.rows_needing_review += 1
             else:
-                apply_product_to_line(line, match.product, match.match_method, bp_rules=bp_rules)
+                apply_product_to_line(
+                    line,
+                    match.product,
+                    match.match_method,
+                    bp_rules=bp_rules,
+                    invoice_routing_entries=invoice_routing_entries,
+                )
                 run.rows_ready += 1
 
             db.session.add(line)
@@ -831,6 +956,7 @@ def apply_review_decisions(run_id: str, mapping: dict[str, int]) -> UploadRun:
         raise WorkbookShapeError("This upload run could not be found.")
 
     bp_rules = load_brand_partner_rules()
+    invoice_routing_entries = load_invoice_routing_entries()
     for source_sku, product_id in mapping.items():
         product = db.session.get(Product, product_id)
         if product is None:
@@ -858,7 +984,13 @@ def apply_review_decisions(run_id: str, mapping: dict[str, int]) -> UploadRun:
             )
         )
         for line in lines:
-            apply_product_to_line(line, product, "approved-alias", bp_rules=bp_rules)
+            apply_product_to_line(
+                line,
+                product,
+                "approved-alias",
+                bp_rules=bp_rules,
+                invoice_routing_entries=invoice_routing_entries,
+            )
 
     _refresh_run_totals(run)
     db.session.commit()
@@ -904,6 +1036,7 @@ def mark_source_sku_inactive(run_id: str, source_sku: str) -> tuple[UploadRun, P
         line.resolved_vatable = False
         line.invoice_owner = None
         line.tax_bucket = None
+        line.invoice_route_name = None
         line.invoice_category = None
         line.prefixed_reference_no = None
         line.classification_source = None
@@ -1147,6 +1280,26 @@ def normalize_sku(value: str) -> str:
     return " ".join("".join(cleaned).split())
 
 
+def _contains_match(left: str, right: str) -> bool:
+    return bool(left and right and (left in right or right in left))
+
+
+def _routing_match_score(
+    candidate_party: str,
+    target_party: str,
+    candidate_sku: str,
+    target_sku: str,
+) -> tuple[int, int, int, int]:
+    exact_party = int(candidate_party == target_party)
+    exact_sku = int(candidate_sku == target_sku)
+    return (
+        exact_party + exact_sku,
+        exact_party,
+        exact_sku,
+        min(len(candidate_party), len(target_party)) + min(len(candidate_sku), len(target_sku)),
+    )
+
+
 def normalize_uom_sync_key(value: str) -> str:
     tokens = [token for token in normalize_sku(value).split() if token and token != "X000D"]
     if len(tokens) > 1 and tokens[0].isalpha() and len(tokens[0]) <= 4:
@@ -1294,6 +1447,60 @@ def load_brand_partner_rules() -> list[BrandPartnerRule]:
     return list_brand_partner_rules()
 
 
+def match_invoice_routing_entry(
+    *,
+    store_name: str | None,
+    sku_name: str | None,
+    entries: list[InvoiceRoutingEntry] | None = None,
+) -> InvoiceRoutingEntry | None:
+    normalized_store = normalize_sku(_string_value(store_name))
+    normalized_sku = normalize_sku(_string_value(sku_name))
+    if not normalized_store or not normalized_sku:
+        return None
+
+    routing_entries = entries if entries is not None else load_invoice_routing_entries()
+    exact_matches = [
+        entry
+        for entry in routing_entries
+        if entry.normalized_party_name == normalized_store and entry.normalized_sku_name == normalized_sku
+    ]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if exact_matches:
+        unique_invoices = {entry.normalized_invoice_name for entry in exact_matches}
+        if len(unique_invoices) == 1:
+            return sorted(exact_matches, key=lambda item: (item.invoice_name.upper(), item.party_name.upper(), item.sku_name.upper()))[0]
+        return None
+
+    fallback_matches = [
+        entry
+        for entry in routing_entries
+        if _contains_match(entry.normalized_party_name, normalized_store)
+        and _contains_match(entry.normalized_sku_name, normalized_sku)
+    ]
+    if len(fallback_matches) == 1:
+        return fallback_matches[0]
+    if not fallback_matches:
+        return None
+
+    fallback_matches.sort(
+        key=lambda item: (
+            -_routing_match_score(item.normalized_party_name, normalized_store, item.normalized_sku_name, normalized_sku),
+            item.invoice_name.upper(),
+            item.party_name.upper(),
+            item.sku_name.upper(),
+        )
+    )
+    best = fallback_matches[0]
+    if len(fallback_matches) > 1:
+        first_score = _routing_match_score(best.normalized_party_name, normalized_store, best.normalized_sku_name, normalized_sku)
+        second = fallback_matches[1]
+        second_score = _routing_match_score(second.normalized_party_name, normalized_store, second.normalized_sku_name, normalized_sku)
+        if first_score == second_score:
+            return None
+    return best
+
+
 def split_prefixed_reference(value: str | None) -> tuple[str | None, str]:
     text = _string_value(value)
     if not text:
@@ -1362,8 +1569,10 @@ def classify_invoice_line(
     sku_name: str | None,
     product: Product | None,
     bp_rules: list[BrandPartnerRule] | None = None,
+    invoice_routing_entries: list[InvoiceRoutingEntry] | None = None,
     existing_category: str | None = None,
     existing_prefixed_reference_no: str | None = None,
+    existing_invoice_route_name: str | None = None,
 ) -> InvoiceClassification:
     raw_reference = _string_value(raw_reference_no)
     existing = _string_value(existing_category).upper()
@@ -1381,6 +1590,7 @@ def classify_invoice_line(
             raw_reference_no=raw_reference,
             invoice_owner=existing_owner,
             tax_bucket=existing_tax_bucket,
+            invoice_route_name=_string_value(existing_invoice_route_name) or None,
             invoice_category=existing_category_name,
             prefixed_reference_no=prefixed_reference,
             classification_source="prefixed_reference",
@@ -1388,6 +1598,27 @@ def classify_invoice_line(
         )
 
     resolved_sku_name = _string_value(sku_name or (product.sku_name if product is not None else ""))
+    invoice_route = match_invoice_routing_entry(
+        store_name=store_name,
+        sku_name=resolved_sku_name,
+        entries=invoice_routing_entries,
+    )
+    if invoice_route is not None:
+        normalized_invoice_name = invoice_route.normalized_invoice_name or normalize_sku(invoice_route.invoice_name)
+        invoice_owner = INVOICE_OWNER_DALA if normalized_invoice_name == INVOICE_OWNER_DALA else INVOICE_OWNER_BP
+        tax_bucket = TAX_BUCKET_VT if product is not None and product.vatable else TAX_BUCKET_NV if product is not None else None
+        category = build_invoice_category(invoice_owner, tax_bucket)
+        return InvoiceClassification(
+            raw_reference_no=raw_reference,
+            invoice_owner=invoice_owner,
+            tax_bucket=tax_bucket,
+            invoice_route_name=invoice_route.invoice_name,
+            invoice_category=category,
+            prefixed_reference_no=build_prefixed_reference(category, raw_reference),
+            classification_source="invoice_routing_db",
+            bp_rule_reason=invoice_route.invoice_name,
+        )
+
     rules = bp_rules if bp_rules is not None else load_brand_partner_rules()
     matched_bp_reason: str | None = None
     for rule in rules:
@@ -1408,6 +1639,7 @@ def classify_invoice_line(
             raw_reference_no=raw_reference,
             invoice_owner=invoice_owner,
             tax_bucket=tax_bucket,
+            invoice_route_name=None,
             invoice_category=category,
             prefixed_reference_no=build_prefixed_reference(category, raw_reference),
             classification_source="bp_rule" if matched_bp_reason else "product_vat",
@@ -1419,6 +1651,7 @@ def classify_invoice_line(
             raw_reference_no=raw_reference,
             invoice_owner=INVOICE_OWNER_BP,
             tax_bucket=None,
+            invoice_route_name=None,
             invoice_category=INVOICE_CATEGORY_BP,
             prefixed_reference_no=build_prefixed_reference(INVOICE_CATEGORY_BP, raw_reference),
             classification_source="bp_rule",
@@ -1429,6 +1662,7 @@ def classify_invoice_line(
         raw_reference_no=raw_reference,
         invoice_owner=None,
         tax_bucket=None,
+        invoice_route_name=None,
         invoice_category=None,
         prefixed_reference_no=existing_prefixed_reference_no or None,
         classification_source=None,
@@ -1444,6 +1678,7 @@ def apply_invoice_classification_to_record(
     sku_name: str | None,
     raw_reference_no: str | None,
     bp_rules: list[BrandPartnerRule] | None = None,
+    invoice_routing_entries: list[InvoiceRoutingEntry] | None = None,
 ) -> InvoiceClassification:
     parsed_category, stripped_reference = split_prefixed_reference(
         getattr(record, "prefixed_reference_no", None) or getattr(record, "order_reference_no", None)
@@ -1454,13 +1689,16 @@ def apply_invoice_classification_to_record(
         sku_name=sku_name,
         product=product,
         bp_rules=bp_rules,
+        invoice_routing_entries=invoice_routing_entries,
         existing_category=parsed_category or getattr(record, "invoice_category", None),
         existing_prefixed_reference_no=getattr(record, "prefixed_reference_no", None)
         or getattr(record, "order_reference_no", None),
+        existing_invoice_route_name=getattr(record, "invoice_route_name", None),
     )
     record.raw_reference_no = classification.raw_reference_no or None
     record.invoice_owner = classification.invoice_owner
     record.tax_bucket = classification.tax_bucket
+    record.invoice_route_name = classification.invoice_route_name
     record.invoice_category = classification.invoice_category
     record.prefixed_reference_no = classification.prefixed_reference_no
     record.classification_source = classification.classification_source
@@ -1474,6 +1712,7 @@ def apply_product_to_line(
     match_method: str,
     *,
     bp_rules: list[BrandPartnerRule] | None = None,
+    invoice_routing_entries: list[InvoiceRoutingEntry] | None = None,
 ) -> None:
     line.product_id = product.id
     line.status = "ready"
@@ -1488,6 +1727,7 @@ def apply_product_to_line(
         sku_name=product.sku_name,
         raw_reference_no=getattr(line, "raw_reference_no", None) or line.order_number,
         bp_rules=bp_rules,
+        invoice_routing_entries=invoice_routing_entries,
     )
     line.order_number = classification.prefixed_reference_no or classification.raw_reference_no or line.order_number
 
@@ -1603,6 +1843,66 @@ def _extract_stock_category_summary_rows(workbook: Any) -> list[list[Any]] | Non
         return rows or None
 
     return None
+
+
+def _extract_invoice_routing_rows_from_workbook(workbook: Any) -> list[dict[str, str]] | None:
+    for sheet in workbook.worksheets:
+        rows = [
+            [sheet.cell(row_index, column_index).value for column_index in range(1, sheet.max_column + 1)]
+            for row_index in range(1, sheet.max_row + 1)
+        ]
+        extracted = _extract_invoice_routing_rows_from_rows(rows)
+        if extracted is not None:
+            return extracted
+    return None
+
+
+def _extract_invoice_routing_rows_from_delimited_payload(payload: bytes) -> list[dict[str, str]] | None:
+    text = _decode_text_payload(payload)
+    if text is None:
+        return None
+
+    rows = [row for row in csv.reader(StringIO(text), delimiter="\t") if any(_string_value(cell) for cell in row)]
+    if not rows:
+        return None
+    return _extract_invoice_routing_rows_from_rows(rows)
+
+
+def _extract_invoice_routing_rows_from_rows(rows: list[list[Any]]) -> list[dict[str, str]] | None:
+    if not rows:
+        return None
+    header_map = _map_invoice_routing_headers(rows[0])
+    if header_map is None:
+        return None
+
+    extracted: list[dict[str, str]] = []
+    for row in rows[1:]:
+        brand_name = _string_value(row[header_map["brand_name"]]) if header_map["brand_name"] < len(row) else ""
+        sku_name = _string_value(row[header_map["sku_name"]]) if header_map["sku_name"] < len(row) else ""
+        party_name = _string_value(row[header_map["party_name"]]) if header_map["party_name"] < len(row) else ""
+        invoice_name = _string_value(row[header_map["invoice_name"]]) if header_map["invoice_name"] < len(row) else ""
+        if not sku_name or not party_name or not invoice_name:
+            continue
+        extracted.append(
+            {
+                "brand_name": brand_name,
+                "sku_name": sku_name,
+                "party_name": party_name,
+                "invoice_name": invoice_name,
+            }
+        )
+    return extracted or None
+
+
+def _map_invoice_routing_headers(header_row: list[Any]) -> dict[str, int] | None:
+    normalized_headers = {_normalize_header(value): index for index, value in enumerate(header_row)}
+    mapped: dict[str, int] = {}
+    for field_name, aliases in INVOICE_ROUTING_HEADERS.items():
+        index = next((normalized_headers[alias] for alias in aliases if alias in normalized_headers), None)
+        if index is None:
+            return None
+        mapped[field_name] = index
+    return mapped
 
 
 def _extract_item_list_rows(payload: bytes) -> list[list[Any]] | None:

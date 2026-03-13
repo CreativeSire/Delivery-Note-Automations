@@ -11,6 +11,8 @@ from loading_tracker_services import create_loading_tracker_import_job, run_load
 from models import (
     AuditEvent,
     BrandPartnerRule,
+    InvoiceRoutingEntry,
+    InvoiceRoutingImport,
     LoadingTrackerDailyCount,
     LoadingTrackerDay,
     LoadingTrackerEvent,
@@ -270,6 +272,22 @@ def build_uom_workbook_from_rows(rows: list[list[object]]) -> BytesIO:
     ws.title = "UOM"
     ws.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
     for row in rows:
+        ws.append(row)
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    return stream
+
+
+def build_invoice_routing_workbook(rows: list[list[object]] | None = None) -> BytesIO:
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = "Invoice Routing"
+    ws.append(["Brand Name", "Stock item Name", "Party Name", "Invoice"])
+    for row in rows or [
+        ["BP August Secret", "SKU Alpha", "Globus Supermarket OKOTA", "August Secret"],
+        ["BP FlozzyD", "SKU Vanilla", "Value Exchange Supermarket KESHI", "FlozzyD invoice"],
+    ]:
         ws.append(row)
     stream = BytesIO()
     workbook.save(stream)
@@ -1027,6 +1045,50 @@ def test_product_master_page_exposes_uom_import_and_redirects_back() -> None:
             db.engine.dispose()
 
 
+def test_product_master_page_imports_invoice_routing_database() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+
+        page = client.get("/database")
+        html = page.get_data(as_text=True)
+        assert page.status_code == 200
+        assert "Brand Partner source database" in html
+        assert "Import routing database" in html
+
+        response = client.post(
+            "/invoice-routing/import",
+            data={
+                "return_to": "product_master",
+                "invoice_routing_workbook": (
+                    BytesIO(build_invoice_routing_workbook().getvalue()),
+                    "sample datab.xlsx",
+                ),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "Invoice routing source updated" in html
+        assert "sample datab.xlsx" in html
+        assert "August Secret" in html
+
+        with app.app_context():
+            assert db.session.query(InvoiceRoutingImport).count() == 1
+            assert db.session.query(InvoiceRoutingEntry).count() == 2
+            assert db.session.query(AuditEvent).filter_by(event_type="invoice_routing_imported").count() == 1
+            db.session.remove()
+            db.engine.dispose()
+
+
 def test_uom_import_redirects_to_review_for_missing_source_rows() -> None:
     with TemporaryDirectory() as temp_dir:
         app = create_app(
@@ -1131,6 +1193,68 @@ def test_brand_partner_rules_workspace_can_preview_classification() -> None:
 
         with app.app_context():
             assert db.session.query(AuditEvent).filter_by(event_type="bp_rule_created").count() == 1
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_brand_partner_rules_workspace_prefers_invoice_routing_database() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        response = client.post(
+            "/uom/import",
+            data={
+                "uom_workbook": (
+                    BytesIO(build_uom_workbook_from_rows([["SKU Alpha", "ctn", "pcs", 12, "Yes", 100]]).getvalue()),
+                    "uom.xlsx",
+                )
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        response = client.post(
+            "/invoice-routing/import",
+            data={
+                "return_to": "bp_rules",
+                "invoice_routing_workbook": (
+                    BytesIO(build_invoice_routing_workbook([["BP August Secret", "SKU Alpha", "Globus Supermarket OKOTA", "August Secret"]]).getvalue()),
+                    "sample datab.xlsx",
+                ),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+
+        with app.app_context():
+            product_id = db.session.query(Product.id).filter_by(sku_name="SKU Alpha").scalar()
+            assert product_id is not None
+
+        response = client.post(
+            "/bp-rules/test",
+            data={
+                "sku_name": "SKU Alpha",
+                "store_name": "Globus Supermarket OKOTA",
+                "raw_reference_no": "17575653",
+                "product_id": str(product_id),
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert "Matched the imported invoice-routing database: August Secret." in html
+        assert "Route: August Secret" in html
+        assert "BP-17575653" in html
+
+        with app.app_context():
             db.session.remove()
             db.engine.dispose()
 
@@ -2511,6 +2635,80 @@ def test_sales_order_run_splits_same_reference_into_bp_vt_and_nv_lines() -> None
             ]
             assert lines[0].classification_source == "bp_rule"
             assert lines[0].bp_rule_reason == "Globus Alpha BP"
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_sales_order_run_uses_invoice_routing_database_for_bp_flagging() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        response = client.post(
+            "/uom/import",
+            data={
+                "uom_workbook": (
+                    BytesIO(
+                        build_uom_workbook_from_rows(
+                            [
+                                ["SKU Alpha", "ctn", "pcs", 12, "Yes", 100],
+                                ["SKU Vanilla", "ctn", "pcs", 12, "No", 120],
+                            ]
+                        ).getvalue()
+                    ),
+                    "uom.xlsx",
+                )
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        response = client.post(
+            "/invoice-routing/import",
+            data={
+                "return_to": "product_master",
+                "invoice_routing_workbook": (
+                    BytesIO(
+                        build_invoice_routing_workbook(
+                            [["BP August Secret", "SKU Alpha", "Globus Supermarket OKOTA", "August Secret"]]
+                        ).getvalue()
+                    ),
+                    "sample datab.xlsx",
+                ),
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        upload = client.post(
+            "/sales-order/import",
+            data={"sales_order_workbook": (BytesIO(build_pepup_orders_workbook().getvalue()), "pepup.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert upload.status_code == 302
+        assert "/review" not in upload.headers["Location"]
+        run_id = upload.headers["Location"].split("/sales-order/runs/")[1]
+
+        page = client.get(upload.headers["Location"])
+        html = page.get_data(as_text=True)
+        assert page.status_code == 200
+        assert "August Secret" in html
+        assert "BP-17552475" in html
+
+        with app.app_context():
+            lines = db.session.query(SalesOrderLine).filter_by(run_id=run_id).order_by(SalesOrderLine.id.asc()).all()
+            assert lines[0].invoice_category == "BP"
+            assert lines[0].prefixed_reference_no == "BP-17552475"
+            assert lines[0].invoice_route_name == "August Secret"
+            assert lines[0].classification_source == "invoice_routing_db"
+            assert lines[1].invoice_category == "NV"
             db.session.remove()
             db.engine.dispose()
 

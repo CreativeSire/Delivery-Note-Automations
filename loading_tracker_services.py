@@ -46,6 +46,7 @@ from services import (
     apply_product_to_line,
     build_prefixed_reference,
     invoice_category_parts,
+    load_invoice_routing_entries,
     load_brand_partner_rules,
     resolve_product_match,
     split_prefixed_reference,
@@ -1576,6 +1577,7 @@ def create_delivery_note_run_from_loading_day(import_id: str, day_name: str, tim
     products = list(db.session.scalars(select(Product)))
     aliases = list(db.session.scalars(select(ProductAlias)))
     bp_rules = load_brand_partner_rules()
+    invoice_routing_entries = load_invoice_routing_entries()
 
     run = UploadRun(
         id=uuid4().hex,
@@ -1612,6 +1614,7 @@ def create_delivery_note_run_from_loading_day(import_id: str, day_name: str, tim
                 raw_reference_no=item_reference,
                 invoice_owner=item.invoice_owner or item_owner,
                 tax_bucket=item.tax_bucket or item_tax_bucket,
+                invoice_route_name=item.invoice_route_name or None,
                 invoice_category=item_category or item.invoice_category or None,
                 prefixed_reference_no=prefixed_reference or None,
                 classification_source=item.classification_source or None,
@@ -1630,7 +1633,13 @@ def create_delivery_note_run_from_loading_day(import_id: str, day_name: str, tim
                 line.status = "needs_review"
                 run.rows_needing_review += 1
             else:
-                apply_product_to_line(line, match.product, match.match_method, bp_rules=bp_rules)
+                apply_product_to_line(
+                    line,
+                    match.product,
+                    match.match_method,
+                    bp_rules=bp_rules,
+                    invoice_routing_entries=invoice_routing_entries,
+                )
                 run.rows_ready += 1
             db.session.add(line)
 
@@ -1705,6 +1714,7 @@ def _save_row_record(
                 raw_reference_no=item.get("raw_reference_no") or None,
                 invoice_owner=item.get("invoice_owner") or item_owner,
                 tax_bucket=item.get("tax_bucket") or item_tax_bucket,
+                invoice_route_name=item.get("invoice_route_name") or None,
                 invoice_category=item_category or item.get("invoice_category") or None,
                 prefixed_reference_no=item.get("prefixed_reference_no") or None,
                 classification_source=item.get("classification_source") or None,
@@ -1800,6 +1810,7 @@ def _serialize_row(row: LoadingTrackerRow) -> dict[str, Any]:
             "quantity": round(_float_value(item.quantity), 2),
             "invoice_owner": item.invoice_owner or "",
             "tax_bucket": item.tax_bucket or "",
+            "invoice_route_name": item.invoice_route_name or "",
             "invoice_category": item.invoice_category or "",
             "raw_reference_no": item.raw_reference_no or "",
             "prefixed_reference_no": build_prefixed_reference(item.invoice_category, item.raw_reference_no)
@@ -1913,6 +1924,7 @@ def _group_sku_automator_store_rows(lines: list[SkuAutomatorLine]) -> list[dict[
                     "quantity": 0.0,
                     "invoice_owner": line.invoice_owner or "",
                     "tax_bucket": line.tax_bucket or "",
+                    "invoice_route_name": line.invoice_route_name or "",
                     "invoice_category": line.invoice_category or "",
                     "prefixed_reference_no": normalized_prefixed_reference,
                     "raw_reference_no": line.raw_reference_no or "",
@@ -1931,6 +1943,7 @@ def _group_sku_automator_store_rows(lines: list[SkuAutomatorLine]) -> list[dict[
                 "quantity": round(item["quantity"], 2),
                 "invoice_owner": item["invoice_owner"],
                 "tax_bucket": item["tax_bucket"],
+                "invoice_route_name": item["invoice_route_name"],
                 "invoice_category": item["invoice_category"],
                 "prefixed_reference_no": item["prefixed_reference_no"],
                 "raw_reference_no": item["raw_reference_no"],

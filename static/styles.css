@@ -2585,6 +2585,19 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.invoice-route-note {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(20, 52, 60, 0.08);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
 .invoice-pill {
   display: inline-flex;
   align-items: center;

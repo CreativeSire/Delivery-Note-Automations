@@ -75,6 +75,31 @@ class BrandPartnerRule(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class InvoiceRoutingImport(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    filename = db.Column(db.String(255), nullable=False)
+    row_count = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+
+    entries = db.relationship("InvoiceRoutingEntry", back_populates="routing_import", cascade="all, delete-orphan")
+
+
+class InvoiceRoutingEntry(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    import_id = db.Column(db.Integer, db.ForeignKey("invoice_routing_import.id"), nullable=False, index=True)
+    brand_name = db.Column(db.String(255), nullable=True)
+    normalized_brand_name = db.Column(db.String(255), nullable=True, index=True)
+    sku_name = db.Column(db.String(255), nullable=False)
+    normalized_sku_name = db.Column(db.String(255), nullable=False, index=True)
+    party_name = db.Column(db.String(255), nullable=False)
+    normalized_party_name = db.Column(db.String(255), nullable=False, index=True)
+    invoice_name = db.Column(db.String(255), nullable=False)
+    normalized_invoice_name = db.Column(db.String(255), nullable=False, index=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+
+    routing_import = db.relationship("InvoiceRoutingImport", back_populates="entries")
+
+
 class AuditEvent(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     module_name = db.Column(db.String(64), nullable=False, index=True)
@@ -118,6 +143,7 @@ class UploadLine(db.Model):
     raw_reference_no = db.Column(db.String(128), nullable=True)
     invoice_owner = db.Column(db.String(8), nullable=True, index=True)
     tax_bucket = db.Column(db.String(8), nullable=True, index=True)
+    invoice_route_name = db.Column(db.String(255), nullable=True)
     invoice_category = db.Column(db.String(8), nullable=True, index=True)
     prefixed_reference_no = db.Column(db.String(160), nullable=True)
     classification_source = db.Column(db.String(64), nullable=True)
@@ -166,6 +192,7 @@ class SalesOrderLine(db.Model):
     raw_reference_no = db.Column(db.String(128), nullable=True)
     invoice_owner = db.Column(db.String(8), nullable=True, index=True)
     tax_bucket = db.Column(db.String(8), nullable=True, index=True)
+    invoice_route_name = db.Column(db.String(255), nullable=True)
     invoice_category = db.Column(db.String(8), nullable=True, index=True)
     prefixed_reference_no = db.Column(db.String(160), nullable=True)
     classification_source = db.Column(db.String(64), nullable=True)
@@ -211,6 +238,7 @@ class SkuAutomatorLine(db.Model):
     raw_reference_no = db.Column(db.String(128), nullable=True)
     invoice_owner = db.Column(db.String(8), nullable=True, index=True)
     tax_bucket = db.Column(db.String(8), nullable=True, index=True)
+    invoice_route_name = db.Column(db.String(255), nullable=True)
     invoice_category = db.Column(db.String(8), nullable=True, index=True)
     prefixed_reference_no = db.Column(db.String(160), nullable=True)
     classification_source = db.Column(db.String(64), nullable=True)
@@ -492,6 +520,7 @@ class LoadingTrackerRowItem(db.Model):
     raw_reference_no = db.Column(db.String(128), nullable=True)
     invoice_owner = db.Column(db.String(8), nullable=True, index=True)
     tax_bucket = db.Column(db.String(8), nullable=True, index=True)
+    invoice_route_name = db.Column(db.String(255), nullable=True)
     invoice_category = db.Column(db.String(8), nullable=True, index=True)
     prefixed_reference_no = db.Column(db.String(160), nullable=True)
     classification_source = db.Column(db.String(64), nullable=True)
@@ -505,6 +534,7 @@ RUNTIME_SCHEMA_UPDATES = {
         "raw_reference_no": "VARCHAR(128)",
         "invoice_owner": "VARCHAR(8)",
         "tax_bucket": "VARCHAR(8)",
+        "invoice_route_name": "VARCHAR(255)",
         "invoice_category": "VARCHAR(8)",
         "prefixed_reference_no": "VARCHAR(160)",
         "classification_source": "VARCHAR(64)",
@@ -514,6 +544,7 @@ RUNTIME_SCHEMA_UPDATES = {
         "raw_reference_no": "VARCHAR(128)",
         "invoice_owner": "VARCHAR(8)",
         "tax_bucket": "VARCHAR(8)",
+        "invoice_route_name": "VARCHAR(255)",
         "invoice_category": "VARCHAR(8)",
         "prefixed_reference_no": "VARCHAR(160)",
         "classification_source": "VARCHAR(64)",
@@ -523,6 +554,7 @@ RUNTIME_SCHEMA_UPDATES = {
         "raw_reference_no": "VARCHAR(128)",
         "invoice_owner": "VARCHAR(8)",
         "tax_bucket": "VARCHAR(8)",
+        "invoice_route_name": "VARCHAR(255)",
         "invoice_category": "VARCHAR(8)",
         "prefixed_reference_no": "VARCHAR(160)",
         "classification_source": "VARCHAR(64)",
@@ -532,6 +564,7 @@ RUNTIME_SCHEMA_UPDATES = {
         "raw_reference_no": "VARCHAR(128)",
         "invoice_owner": "VARCHAR(8)",
         "tax_bucket": "VARCHAR(8)",
+        "invoice_route_name": "VARCHAR(255)",
         "invoice_category": "VARCHAR(8)",
         "prefixed_reference_no": "VARCHAR(160)",
         "classification_source": "VARCHAR(64)",

@@ -60,6 +60,7 @@ from services import (
     apply_review_decisions,
     bootstrap_seed_uom_if_empty,
     build_dashboard_summary,
+    build_invoice_routing_summary,
     build_ignored_history_summary,
     build_run_summary,
     create_tracker_run,
@@ -68,6 +69,7 @@ from services import (
     export_run_to_xls,
     get_pending_uom_import_review,
     get_uom_import_review,
+    import_invoice_routing_workbook,
     import_uom_workbook,
     list_brand_partner_rules,
     mark_source_sku_inactive,
@@ -133,6 +135,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     def render_product_master(product_to_edit: Product | None = None) -> str:
         search_query = request.args.get("q", "").strip()
         summary = build_dashboard_summary()
+        invoice_routing_summary = build_invoice_routing_summary()
         correction_matches: list[ProductAlias] = []
         brand_partner_rules = list_brand_partner_rules()
         pending_uom_review = get_pending_uom_import_review()
@@ -185,6 +188,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             inactive_preview_limited=not search_query and summary.inactive_product_count > len(inactive_products),
             search_query=search_query,
             summary=summary,
+            invoice_routing_summary=invoice_routing_summary,
             product_to_edit=product_to_edit,
         )
 
@@ -213,6 +217,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         search_query = request.args.get("q", "").strip()
         preview = None
         rules = list_brand_partner_rules()
+        invoice_routing_summary = build_invoice_routing_summary()
         if search_query:
             lowered = search_query.lower()
             rules = [
@@ -232,6 +237,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             search_query=search_query,
             preview=preview,
             all_products=all_products,
+            invoice_routing_summary=invoice_routing_summary,
         )
 
     @app.post("/bp-rules/test")
@@ -262,12 +268,14 @@ def create_app(test_config: dict | None = None) -> Flask:
             raw_reference_no=raw_reference_no or None,
             product_id=product_id,
         )
+        invoice_routing_summary = build_invoice_routing_summary()
         return render_template(
             "bp_rules.html",
             rules=rules,
             search_query=search_query,
             preview=preview,
             all_products=all_products,
+            invoice_routing_summary=invoice_routing_summary,
         )
 
     @app.get("/sales-order")
@@ -784,6 +792,39 @@ def create_app(test_config: dict | None = None) -> Flask:
             )
         else:
             flash(f"UOM import complete. {import_log.product_count} product rows were saved.", "success")
+        return redirect(url_for(redirect_target))
+
+    @app.post("/invoice-routing/import")
+    def upload_invoice_routing() -> str:
+        return_to = request.form.get("return_to", "").strip()
+        redirect_target = "brand_partner_rules_home" if return_to == "bp_rules" else "product_master"
+        uploaded_file = request.files.get("invoice_routing_workbook")
+        if uploaded_file is None or uploaded_file.filename == "":
+            flash("Please choose the invoice-routing database file first.", "error")
+            return redirect(url_for(redirect_target))
+
+        try:
+            import_log = import_invoice_routing_workbook(uploaded_file)
+        except ServiceError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for(redirect_target))
+
+        record_audit_event(
+            module_name="Database",
+            event_type="invoice_routing_imported",
+            entity_type="invoice_routing_import",
+            entity_id=str(import_log.id),
+            entity_name=import_log.filename,
+            summary_text=(
+                f"Imported invoice-routing source '{import_log.filename}' with {import_log.row_count} live route rows."
+            ),
+            details={"row_count": import_log.row_count},
+        )
+        db.session.commit()
+        flash(
+            f"Invoice routing source updated. {import_log.row_count} store and SKU route rows now guide BP ownership.",
+            "success",
+        )
         return redirect(url_for(redirect_target))
 
     @app.get("/uom/reviews/<review_id>")
