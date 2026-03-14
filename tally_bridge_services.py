@@ -320,6 +320,20 @@ def build_tally_bridge_run_detail(run_id: str) -> TallyBridgeRunDetail | None:
         and link_guard.status == "clear"
         and (run.profile.capabilities_json or {}).get("probe_status") == "success"
     )
+    auto_fetch_allowed = bool(
+        run.profile
+        and link_guard.status == "clear"
+        and (
+            (
+                run.profile.connection_mode in {"xml_http", "hybrid"}
+                and _is_http_endpoint(run.profile.endpoint_url)
+            )
+            or (
+                run.profile.connection_mode in {"file_drop", "hybrid"}
+                and not _is_http_endpoint(run.profile.endpoint_url)
+            )
+        )
+    )
     return TallyBridgeRunDetail(
         run=run,
         recommended_mode_label=_mode_label(run.bridge_mode),
@@ -328,7 +342,7 @@ def build_tally_bridge_run_detail(run_id: str) -> TallyBridgeRunDetail | None:
         register_exists=bool(run.register_storage_path and Path(run.register_storage_path).exists()),
         endpoint_response_exists=bool(endpoint_response_path and endpoint_response_path.exists()),
         link_guard=link_guard,
-        auto_fetch_allowed=bool(run.profile and run.profile.connection_mode in {"file_drop", "hybrid"} and link_guard.status == "clear"),
+        auto_fetch_allowed=auto_fetch_allowed,
         direct_send_allowed=direct_send_allowed,
     )
 
@@ -740,12 +754,20 @@ def pull_tally_register_from_profile_target(run_id: str) -> TallyBridgeRun:
     guard = resolve_tally_bridge_link_guard(run.profile_id)
     if guard.status != "clear":
         raise ServiceError("Auto-fetch is only available after the Tally chain is verified as clear in diagnostics.")
-    if run.profile is None or run.profile.connection_mode not in {"file_drop", "hybrid"}:
-        raise ServiceError("Auto-fetch needs a file-drop or hybrid Tally profile.")
+    if run.profile is None:
+        raise ServiceError("Link this run to a Tally profile before pulling the returned register.")
 
     destination = _nullable_text(run.profile.endpoint_url)
     if not destination:
-        raise ServiceError("This Tally profile does not have a watched local folder configured yet.")
+        raise ServiceError("This Tally profile does not have a bridge target configured yet.")
+
+    if _is_http_endpoint(destination):
+        if run.profile.connection_mode not in {"xml_http", "hybrid"}:
+            raise ServiceError("HTTP register pull needs an XML / HTTP or hybrid Tally profile.")
+        return _pull_tally_register_from_http_endpoint(run, destination)
+
+    if run.profile.connection_mode not in {"file_drop", "hybrid"}:
+        raise ServiceError("Folder-based auto-fetch needs a file-drop or hybrid Tally profile.")
 
     watched_dir = Path(destination)
     if not watched_dir.exists() or not watched_dir.is_dir():
@@ -760,6 +782,43 @@ def pull_tally_register_from_profile_target(run_id: str) -> TallyBridgeRun:
         run,
         payload=candidate.read_bytes(),
         filename=candidate.name,
+        content_type=content_type,
+    )
+
+
+def _pull_tally_register_from_http_endpoint(run: TallyBridgeRun, endpoint: str) -> TallyBridgeRun:
+    register_url = endpoint.rstrip("/") + "/register/latest?claim=1"
+    request = urlrequest.Request(
+        register_url,
+        method="GET",
+        headers={
+            "Accept": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel, text/csv, text/plain",
+            "User-Agent": "DALA-Tally-Bridge/1.0",
+            "X-DALA-Bridge-Run-ID": run.id,
+            "X-DALA-Source-Run-ID": run.sales_order_run_id,
+        },
+    )
+    try:
+        with urlrequest.urlopen(request, timeout=20) as response:
+            payload = response.read()
+            content_type = response.headers.get_content_type() if response.headers else "application/octet-stream"
+            filename = _http_header_get(response.headers, "X-DALA-Register-Filename") or _http_header_get(response.headers, "X-Filename")
+            filename = filename or f"register-{run.id}{_suggest_file_suffix(content_type)}"
+    except urlerror.HTTPError as exc:
+        if exc.code == 404:
+            raise ServiceError("No returned Tally register is available on the local bridge yet.") from exc
+        response_text = exc.read(4096).decode("utf-8", errors="replace")
+        raise ServiceError(f"Could not pull the returned register from the local bridge: HTTP {exc.code}. {response_text}".strip()) from exc
+    except urlerror.URLError as exc:
+        raise ServiceError(f"Could not reach the local bridge while pulling the returned register: {exc.reason}") from exc
+
+    if not payload:
+        raise ServiceError("The local bridge responded, but no register payload was returned.")
+
+    return _attach_register_payload_to_bridge_run(
+        run,
+        payload=payload,
+        filename=filename,
         content_type=content_type,
     )
 
@@ -908,6 +967,32 @@ def _response_file_suffix(content_type: str | None) -> str:
     if "html" in normalized:
         return ".html"
     return ".txt"
+
+
+def _suggest_file_suffix(content_type: str | None) -> str:
+    normalized = (content_type or "").lower()
+    if "spreadsheetml" in normalized:
+        return ".xlsx"
+    if "ms-excel" in normalized or normalized.endswith("/xls"):
+        return ".xls"
+    if "csv" in normalized:
+        return ".csv"
+    if "tab-separated-values" in normalized or "tsv" in normalized:
+        return ".tsv"
+    if "text/plain" in normalized:
+        return ".txt"
+    return ".bin"
+
+
+def _http_header_get(headers: object, key: str) -> str | None:
+    if headers is None:
+        return None
+    getter = getattr(headers, "get", None)
+    if callable(getter):
+        value = getter(key)
+        if value:
+            return str(value)
+    return None
 
 
 def _response_confirms_direct_send(response_bytes: bytes, content_type: str | None) -> bool:

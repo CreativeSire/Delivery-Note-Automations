@@ -864,7 +864,7 @@ def test_tally_bridge_can_filter_clear_runs_and_pull_register_from_watched_folde
         assert detail_page.status_code == 200
         detail_html = detail_page.get_data(as_text=True)
         assert "Imported chain verified" in detail_html
-        assert "Pull register from watched folder" in detail_html
+        assert "Pull returned register" in detail_html
 
         clear_home = client.get("/tally-bridge?guard=clear")
         assert clear_home.status_code == 200
@@ -1108,6 +1108,215 @@ def test_tally_bridge_can_send_directly_to_a_probed_http_endpoint() -> None:
         assert "HTTP 200" in updated_detail_html
 
         with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_tally_bridge_can_pull_register_from_http_bridge_endpoint() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        uom = Workbook()
+        sheet = uom.active
+        sheet.title = "UOM"
+        sheet.append(["ITEM", "UOM", "ALT UOM", "Conversion", "Vatable", "Prices"])
+        sheet.append(["SKU Alpha", "ctn", "pcs", 12, "Yes", 100])
+        uom_bytes = BytesIO()
+        uom.save(uom_bytes)
+        uom_bytes.seek(0)
+
+        response = client.post(
+            "/uom/import",
+            data={"uom_workbook": (BytesIO(uom_bytes.getvalue()), "uom.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+        sales = Workbook()
+        sales_sheet = sales.active
+        sales_sheet.title = "Order Item List"
+        sales_sheet.append(
+            [
+                "Date of Order",
+                "Time of Order",
+                "Order Number",
+                "Retailer Name",
+                "Item Name",
+                "UOM",
+                "Quantity",
+                "Price",
+                "Total",
+            ]
+        )
+        sales_sheet.append(
+            [
+                "2026-03-13 00:00:00",
+                "09:00:00",
+                "17599931",
+                "Sample Mart",
+                "SKU Alpha",
+                "cases",
+                2,
+                100,
+                200,
+            ]
+        )
+        sales_bytes = BytesIO()
+        sales.save(sales_bytes)
+        sales_bytes.seek(0)
+
+        upload = client.post(
+            "/sales-order/import",
+            data={"sales_order_workbook": (BytesIO(sales_bytes.getvalue()), "orders.xlsx")},
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+        assert upload.status_code == 302
+        run_id = upload.headers["Location"].split("/sales-order/runs/")[1]
+
+        profile_response = client.post(
+            "/tally-bridge/profile",
+            data={
+                "name": "HTTP register profile",
+                "connection_mode": "xml_http",
+                "company_name": "DALA",
+                "endpoint_url": "http://127.0.0.1:9000",
+                "profile_xml_http": "yes",
+                "profile_outbound_import": "yes",
+                "profile_register_fetch": "yes",
+            },
+            follow_redirects=False,
+        )
+        assert profile_response.status_code == 302
+
+        with app.app_context():
+            profile = db.session.query(TallyBridgeProfile).filter_by(name="HTTP register profile").one()
+            profile.capabilities_json = {
+                "xml_http": "yes",
+                "outbound_import": "yes",
+                "register_fetch": "yes",
+                "probe_status": "success",
+                "probe_http_status": 200,
+                "probe_message": "Tally-style XML envelope returned from the configured endpoint.",
+            }
+            db.session.commit()
+            profile_id = profile.id
+
+        create_run = client.post(
+            "/tally-bridge/diagnostics",
+            data={"title": "HTTP register proof", "profile_id": str(profile_id)},
+            follow_redirects=False,
+        )
+        assert create_run.status_code == 302
+        diagnostics_run_id = create_run.headers["Location"].rstrip("/").split("/")[-1]
+
+        for artifact_group, prefix in (("manual_linked", "Manual"), ("uploaded_unlinked", "Imported")):
+            for artifact_type in ("sales_order", "delivery_note", "sales_invoice"):
+                response = client.post(
+                    f"/tally-bridge/diagnostics/{diagnostics_run_id}/artifacts",
+                    data={
+                        "artifact_group": artifact_group,
+                        "artifact_type": artifact_type,
+                        "artifact_file": (BytesIO(f"{prefix} {artifact_type} VT-17599931".encode()), f"{artifact_group}-{artifact_type}.txt"),
+                    },
+                    content_type="multipart/form-data",
+                    follow_redirects=False,
+                )
+                assert response.status_code == 302
+
+        update_run = client.post(
+            f"/tally-bridge/diagnostics/{diagnostics_run_id}/assessment",
+            data={
+                "status": "bridge_mode_decided",
+                "xml_http_supported": "yes",
+                "outbound_import_supported": "yes",
+                "register_fetch_supported": "yes",
+                "dn_link_supported": "yes",
+                "manual_case_status": "linked",
+                "uploaded_case_status": "linked",
+            },
+            follow_redirects=False,
+        )
+        assert update_run.status_code == 302
+
+        bridge_create = client.post(
+            "/tally-bridge/outbound",
+            data={"sales_order_run_id": run_id, "profile_id": str(profile_id)},
+            follow_redirects=False,
+        )
+        assert bridge_create.status_code == 302
+        bridge_run_id = bridge_create.headers["Location"].rstrip("/").split("/")[-1]
+
+        detail_page = client.get(bridge_create.headers["Location"])
+        assert detail_page.status_code == 200
+        detail_html = detail_page.get_data(as_text=True)
+        assert "Pull returned register" in detail_html
+
+        class FakeHeaders:
+            def __init__(self, content_type: str, filename: str) -> None:
+                self._content_type = content_type
+                self._filename = filename
+
+            def get_content_type(self) -> str:
+                return self._content_type
+
+            def get(self, key: str, default=None):
+                if key == "X-DALA-Register-Filename":
+                    return self._filename
+                return default
+
+        class FakeRegisterResponse:
+            def __init__(self, payload: bytes, *, content_type: str, filename: str, status_code: int = 200) -> None:
+                self._payload = payload
+                self._headers = FakeHeaders(content_type, filename)
+                self._status_code = status_code
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self, size: int = -1) -> bytes:
+                return self._payload if size < 0 else self._payload[:size]
+
+            def getcode(self) -> int:
+                return self._status_code
+
+            @property
+            def headers(self) -> FakeHeaders:
+                return self._headers
+
+        register_payload = build_tally_export_workbook().getvalue()
+        with patch(
+            "tally_bridge_services.urlrequest.urlopen",
+            return_value=FakeRegisterResponse(
+                register_payload,
+                content_type="application/vnd.ms-excel",
+                filename="returned-register.xls",
+            ),
+        ) as mock_urlopen:
+            pull = client.post(f"/tally-bridge/runs/{bridge_run_id}/register/pull", follow_redirects=False)
+
+        assert pull.status_code == 302
+        assert pull.headers["Location"].endswith(f"/tally-bridge/runs/{bridge_run_id}")
+        assert mock_urlopen.called
+
+        with app.app_context():
+            bridge_run = db.session.get(TallyBridgeRun, bridge_run_id)
+            assert bridge_run is not None
+            assert bridge_run.status == "linked_to_sku_automator"
+            assert bridge_run.register_filename == "returned-register.xls"
+            assert bridge_run.register_storage_path is not None
+            assert Path(bridge_run.register_storage_path).exists()
+            assert bridge_run.sku_automator_run_id is not None
             db.session.remove()
             db.engine.dispose()
 
