@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.sql import sqltypes
 
@@ -39,6 +40,7 @@ from models import (
     UploadRun,
     _compile_runtime_column_type,
     db,
+    ensure_runtime_schema,
 )
 from services import bootstrap_seed_uom_if_empty
 from tally_bridge_services import build_tally_bridge_summary
@@ -2223,6 +2225,41 @@ def test_runtime_schema_datetime_compiles_for_postgres() -> None:
         postgresql.dialect(),
     )
     assert timestamp_type == "TIMESTAMP WITH TIME ZONE"
+
+
+def test_runtime_schema_adds_loading_tracker_template_columns_for_legacy_sqlite() -> None:
+    with TemporaryDirectory() as temp_dir:
+        engine = create_engine(f"sqlite:///{Path(temp_dir) / 'legacy.db'}")
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE loading_tracker_template (
+                            id VARCHAR(32) PRIMARY KEY,
+                            name VARCHAR(255) NOT NULL,
+                            source_filename VARCHAR(255),
+                            sheet_names_json JSON,
+                            day_sheet_names_json JSON,
+                            sheet_count INTEGER,
+                            assumptions_sku_count INTEGER NOT NULL DEFAULT 0,
+                            assumptions_store_count INTEGER NOT NULL DEFAULT 0,
+                            workbook_format VARCHAR(32),
+                            workbook_bytes BLOB,
+                            is_active BOOLEAN NOT NULL DEFAULT 1,
+                            created_at DATETIME,
+                            updated_at DATETIME
+                        )
+                        """
+                    )
+                )
+
+            ensure_runtime_schema(engine)
+
+            columns = {column["name"] for column in inspect(engine).get_columns("loading_tracker_template")}
+            assert {"description", "source_import_label", "fees_row_count", "notes_count"} <= columns
+        finally:
+            engine.dispose()
 
 
 def test_uom_import_sets_active_source_of_truth() -> None:

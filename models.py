@@ -666,6 +666,12 @@ RUNTIME_SCHEMA_UPDATES = {
         "classification_source": "VARCHAR(64)",
         "bp_rule_reason": "VARCHAR(255)",
     },
+    "loading_tracker_template": {
+        "description": "TEXT",
+        "source_import_label": "VARCHAR(255)",
+        "fees_row_count": "INTEGER",
+        "notes_count": "INTEGER",
+    },
     "tally_bridge_run": {
         "sku_automator_run_id": "VARCHAR(32)",
         "register_filename": "VARCHAR(255)",
