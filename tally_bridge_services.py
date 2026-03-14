@@ -317,12 +317,12 @@ def build_tally_bridge_run_detail(run_id: str) -> TallyBridgeRunDetail | None:
         run.profile
         and run.profile.connection_mode in {"xml_http", "hybrid"}
         and _is_http_endpoint(run.profile.endpoint_url)
-        and link_guard.status == "clear"
+        and link_guard.status != "blocked"
         and (run.profile.capabilities_json or {}).get("probe_status") == "success"
     )
     auto_fetch_allowed = bool(
         run.profile
-        and link_guard.status == "clear"
+        and link_guard.status != "blocked"
         and (
             (
                 run.profile.connection_mode in {"xml_http", "hybrid"}
