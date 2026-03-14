@@ -29,6 +29,7 @@ XML_RESPONSE = """<?xml version="1.0" encoding="utf-8"?>
 """
 
 ALLOWED_REGISTER_SUFFIXES = {".xlsx", ".xls", ".csv", ".tsv", ".txt"}
+PROBE_HEADER_NAME = "X-DALA-Probe"
 
 
 def parse_args() -> argparse.Namespace:
@@ -112,8 +113,9 @@ def build_handler(state: BridgeState):
             content_length = int(self.headers.get("Content-Length", "0") or "0")
             payload = self.rfile.read(content_length) if content_length > 0 else b""
             content_type = (self.headers.get("Content-Type") or "").lower()
+            probe_header = self.headers.get(PROBE_HEADER_NAME)
 
-            if is_probe_payload(payload, content_type):
+            if is_probe_payload(payload, content_type, probe_header):
                 response = XML_RESPONSE.format(message="Local bridge reachable")
                 self._send_xml(HTTPStatus.OK, response)
                 return
@@ -154,9 +156,12 @@ def build_handler(state: BridgeState):
     return TallyBridgeAgentHandler
 
 
-def is_probe_payload(payload: bytes, content_type: str) -> bool:
-    if "xml" in content_type:
+def is_probe_payload(payload: bytes, content_type: str, probe_header: str | None = None) -> bool:
+    if (probe_header or "").strip() == "1":
         return True
+    normalized_type = content_type.split(";", 1)[0].strip().lower()
+    if normalized_type not in {"text/xml", "application/xml"} and not normalized_type.endswith("+xml"):
+        return False
     sample = payload.decode("utf-8", errors="ignore").lower()
     return "<envelope" in sample and "<body" in sample
 

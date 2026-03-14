@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import importlib.util
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -429,6 +430,70 @@ def test_tally_bridge_profile_can_run_xml_http_probe() -> None:
             assert profile.last_checked_at is not None
             db.session.remove()
             db.engine.dispose()
+
+
+def test_tally_bridge_probe_marks_requests_with_explicit_probe_header() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        client = app.test_client()
+        save_profile = client.post(
+            "/tally-bridge/profile",
+            data={
+                "name": "XML Probe Header",
+                "connection_mode": "xml_http",
+                "company_name": "DALA HQ",
+                "endpoint_url": "http://127.0.0.1:9001",
+                "profile_xml_http": "unknown",
+                "profile_outbound_import": "unknown",
+                "profile_register_fetch": "unknown",
+            },
+            follow_redirects=False,
+        )
+        assert save_profile.status_code == 302
+
+        with app.app_context():
+            profile = db.session.query(TallyBridgeProfile).filter_by(name="XML Probe Header").one()
+            profile_id = profile.id
+
+        class FakeProbeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self, _size: int | None = None):
+                return b"<?xml version='1.0'?><ENVELOPE><BODY><DATA><STATUS>1</STATUS></DATA></BODY></ENVELOPE>"
+
+            def getcode(self):
+                return 200
+
+        with patch("tally_bridge_services.urlrequest.urlopen", return_value=FakeProbeResponse()) as mock_urlopen:
+            response = client.post(f"/tally-bridge/profile/{profile_id}/probe", follow_redirects=True)
+
+        assert response.status_code == 200
+        request_obj = mock_urlopen.call_args.args[0]
+        assert request_obj.get_header("X-dala-probe") == "1"
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_tally_bridge_agent_does_not_treat_xlsx_payload_as_probe() -> None:
+    module = _load_tally_bridge_agent_module()
+    assert module.is_probe_payload(b"PK\x03\x04binary-workbook-data", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") is False
+    assert module.is_probe_payload(
+        b"<?xml version='1.0'?><ENVELOPE><BODY><DATA /></BODY></ENVELOPE>",
+        "text/xml; charset=utf-8",
+        "1",
+    ) is True
 
 
 def test_tally_bridge_diagnostics_surfaces_link_integrity_verdicts() -> None:
@@ -1623,6 +1688,16 @@ def build_stock_category_summary_workbook() -> BytesIO:
     workbook.save(stream)
     stream.seek(0)
     return stream
+
+
+def _load_tally_bridge_agent_module():
+    script_path = Path(r"C:\Users\HomePC\Desktop\DeliveryNote Automations\scripts\tally_bridge_agent.py")
+    spec = importlib.util.spec_from_file_location("tally_bridge_agent_module", script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load tally_bridge_agent.py for testing.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def build_stock_category_summary_uom_layout_workbook() -> BytesIO:

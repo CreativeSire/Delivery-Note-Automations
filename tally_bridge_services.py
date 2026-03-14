@@ -408,6 +408,7 @@ def probe_tally_bridge_profile(profile_id: int) -> TallyBridgeProfile:
             "Content-Type": "text/xml; charset=utf-8",
             "Accept": "text/xml, application/xml",
             "User-Agent": "DALA-Tally-Bridge/1.0",
+            "X-DALA-Probe": "1",
         },
     )
     checked_at = utcnow()
