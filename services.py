@@ -5,7 +5,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from difflib import SequenceMatcher
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -1103,8 +1103,9 @@ def export_run_to_xls(run_id: str, invoice_category: str | None = None) -> tuple
         sheet.col(col_index).width = min(max(len(header) + 3, 14) * 256, 35 * 256)
 
     for row_index, line in enumerate(lines, start=1):
-        amount = line.quantity * line.resolved_rate
-        vat_amount = (amount * VAT_RATE / Decimal("100")).quantize(Decimal("0.01")) if line.resolved_vatable else ""
+        export_rate = _vat_exclusive_rate(line.resolved_rate, line.resolved_vatable)
+        amount = (line.quantity * export_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        vat_amount = (amount * VAT_RATE / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if line.resolved_vatable else ""
         display_reference = build_prefixed_reference(line.invoice_category, line.raw_reference_no) or line.prefixed_reference_no or line.order_number
         row = [
             run.invoice_date,
@@ -1113,7 +1114,7 @@ def export_run_to_xls(run_id: str, invoice_category: str | None = None) -> tuple
             line.supermarket_name,
             line.resolved_sku_name,
             float(line.quantity),
-            float(line.resolved_rate),
+            float(export_rate),
             float(amount),
             SALES_LEDGER_NAME,
             VAT_LABEL if line.resolved_vatable else "",
@@ -1792,6 +1793,16 @@ def apply_product_to_line(
         invoice_routing_entries=invoice_routing_entries,
     )
     line.order_number = classification.prefixed_reference_no or classification.raw_reference_no or line.order_number
+
+
+def _vat_exclusive_rate(rate: Decimal | None, is_vatable: bool) -> Decimal:
+    resolved_rate = rate or Decimal("0")
+    if not is_vatable:
+        return resolved_rate.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return (resolved_rate * Decimal("100") / (Decimal("100") + VAT_RATE)).quantize(
+        Decimal("0.01"),
+        rounding=ROUND_HALF_UP,
+    )
 
 
 def _refresh_run_totals(run: UploadRun) -> None:

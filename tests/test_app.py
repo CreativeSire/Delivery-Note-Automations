@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 import importlib.util
 from io import BytesIO
 from pathlib import Path
@@ -8,6 +9,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
+import xlrd
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.sql import sqltypes
@@ -38,6 +40,7 @@ from models import (
     TallyDiagnosticsArtifact,
     TallyDiagnosticsRun,
     UomImportReview,
+    UploadLine,
     UploadRun,
     _compile_runtime_column_type,
     db,
@@ -2292,6 +2295,61 @@ def test_database_url_uses_psycopg_driver(monkeypatch) -> None:
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example.com:5432/delivery")
     assert _database_uri("unused") == "postgresql+psycopg://user:pass@db.example.com:5432/delivery"
+
+
+def test_delivery_invoice_export_uses_vat_exclusive_rate_for_vatable_items() -> None:
+    with TemporaryDirectory() as temp_dir:
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{Path(temp_dir) / 'test.db'}",
+                "APP_TIMEZONE": "Africa/Lagos",
+            }
+        )
+
+        with app.app_context():
+            run = UploadRun(
+                id="vatfixrun",
+                original_filename="tracker.xlsx",
+                invoice_date="2026-03-15",
+                status="needs_review",
+                rows_detected=1,
+                rows_ready=1,
+                rows_needing_review=0,
+            )
+            db.session.add(run)
+            db.session.add(
+                UploadLine(
+                    run_id=run.id,
+                    order_number="SO-100",
+                    supermarket_name="Market One",
+                    source_sku="SKU Alpha",
+                    normalized_source_sku="sku alpha",
+                    quantity=Decimal("2"),
+                    status="ready",
+                    resolved_sku_name="SKU Alpha",
+                    resolved_rate=Decimal("107.50"),
+                    resolved_vatable=True,
+                    raw_reference_no="SO-100",
+                    invoice_category="VT",
+                )
+            )
+            db.session.commit()
+
+        client = app.test_client()
+        response = client.get("/runs/vatfixrun/download?category=VT")
+        assert response.status_code == 200
+
+        workbook = xlrd.open_workbook(file_contents=response.data)
+        sheet = workbook.sheet_by_index(0)
+        assert sheet.cell_value(1, 6) == 100.0
+        assert sheet.cell_value(1, 7) == 200.0
+        assert sheet.cell_value(1, 10) == 7.5
+        assert sheet.cell_value(1, 11) == 15.0
+
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
 
 
 def test_runtime_schema_datetime_compiles_for_postgres() -> None:
